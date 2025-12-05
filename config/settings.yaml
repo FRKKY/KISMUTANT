@@ -1,0 +1,174 @@
+# Living Trading System - Configuration
+# 
+# This file contains settings that CAN be adjusted (unlike invariants).
+# The system may also learn to adjust some of these over time.
+
+# === SYSTEM MODE ===
+mode: "paper"  # "paper" or "live"
+debug: false
+log_level: "INFO"
+
+# === DATA SETTINGS ===
+data:
+  # Primary market
+  market: "KRX"
+  timezone: "Asia/Seoul"
+  
+  # Data refresh
+  price_update_interval_seconds: 60  # How often to fetch prices during market hours
+  full_refresh_time: "15:45"  # Daily full data refresh (after market close)
+  
+  # History
+  min_history_days: 252  # Minimum days of history before trading an instrument
+  max_history_days: 1260  # 5 years max history to store
+
+# === UNIVERSE DISCOVERY ===
+universe:
+  # Auto-discovery settings
+  auto_discover: true
+  discovery_frequency: "weekly"  # How often to scan for new instruments
+  
+  # Filters for instrument inclusion
+  min_avg_daily_volume: 100000  # Minimum average daily volume
+  min_price: 1000  # Minimum price (KRW)
+  max_price: 10000000  # Maximum price (KRW)
+  min_market_cap: 50000000000  # 50B KRW minimum market cap
+  
+  # Instrument types to include
+  include_types:
+    - "stock"
+    - "etf"
+    - "etn"
+  exclude_types:
+    - "warrant"
+    - "spac"
+
+# === HYPOTHESIS ENGINE ===
+hypothesis:
+  # Generation
+  max_active_hypotheses: 20  # Maximum hypotheses in active trading
+  max_incubating: 10  # Maximum in incubation (small capital test)
+  max_paper_trading: 30  # Maximum in paper trading
+  
+  # Validation thresholds
+  min_backtest_sharpe: 0.5  # Minimum Sharpe ratio to pass backtesting
+  min_backtest_trades: 30  # Minimum trades in backtest
+  min_paper_trades: 20  # Minimum paper trades before promotion
+  paper_vs_backtest_tolerance: 0.4  # Max allowed degradation from backtest
+  
+  # Retirement
+  max_consecutive_losses: 10  # Retire after this many losses
+  max_drawdown_for_retirement: 0.25  # 25% drawdown triggers retirement review
+  performance_review_period_days: 30  # Review hypotheses monthly
+  
+  # Evolution
+  evolution_enabled: true
+  evolution_frequency: "weekly"
+  mutation_rate: 0.1
+  crossover_rate: 0.3
+
+# === PORTFOLIO ===
+portfolio:
+  # Starting capital
+  initial_capital: 10000000  # 10M KRW
+  monthly_contribution: 1000000  # 1M KRW
+  
+  # Allocation
+  max_positions: 15  # Maximum simultaneous positions
+  min_position_size: 100000  # Minimum position size (KRW)
+  
+  # Rebalancing
+  rebalance_frequency: "weekly"
+  rebalance_threshold: 0.05  # 5% drift triggers rebalance
+  
+  # Cash management
+  target_cash_pct: 0.10  # Target 10% cash (above min buffer)
+
+# === RISK MANAGEMENT ===
+# Note: Hard limits are in invariants.py and cannot be changed here
+risk:
+  # Position sizing
+  position_sizing_method: "volatility_adjusted"  # or "fixed_fractional", "kelly"
+  base_risk_per_trade: 0.02  # 2% of portfolio per trade
+  max_risk_per_trade: 0.03  # 3% absolute max
+  
+  # Volatility adjustment
+  volatility_lookback_days: 20
+  volatility_target: 0.15  # 15% annualized target volatility
+  
+  # Correlation
+  max_correlation_exposure: 0.5  # Max 50% in correlated assets (>0.7 correlation)
+  correlation_lookback_days: 60
+  
+  # Drawdown response (softer than invariant circuit breakers)
+  reduce_exposure_at_drawdown: 0.08  # Start reducing at 8% drawdown
+  exposure_reduction_rate: 0.5  # Reduce by 50% per level
+
+# === EXECUTION ===
+execution:
+  # Order types
+  default_order_type: "limit"
+  use_market_orders_for_exits: true
+  
+  # Timing
+  order_submission_time: "09:00"  # Submit orders at market open
+  allow_intraday_exits: true
+  
+  # Slippage
+  expected_slippage_bps: 10  # 10 basis points expected slippage
+  max_acceptable_slippage_bps: 50
+
+# === LEARNING ===
+learning:
+  # Feature discovery
+  feature_discovery_enabled: true
+  max_features_per_instrument: 50
+  feature_importance_threshold: 0.01
+  
+  # Parameter optimization
+  optimization_frequency: "monthly"
+  optimization_method: "bayesian"
+  max_optimization_iterations: 100
+  
+  # Regime detection
+  regime_detection_enabled: true
+  regime_lookback_days: 60
+  regime_change_smoothing_days: 3
+  
+  # Meta-learning
+  meta_learning_enabled: true
+  min_decisions_for_meta_learning: 100
+
+# === REPORTING ===
+reporting:
+  # Daily report
+  daily_report_time: "16:00"
+  daily_report_email: null  # Set email to enable
+  
+  # Weekly report
+  weekly_report_day: "friday"
+  weekly_report_time: "17:00"
+  
+  # Alerts
+  alert_on_circuit_breaker: true
+  alert_on_large_loss: true
+  large_loss_threshold: 0.03  # 3% single-day loss
+  alert_channels:
+    - "log"
+    # - "email"
+    # - "telegram"
+
+# === API CREDENTIALS ===
+# These should be in credentials.yaml, not here
+# This is just documentation of required fields
+api:
+  kis:
+    # Real trading
+    app_key: "${KIS_APP_KEY}"
+    app_secret: "${KIS_APP_SECRET}"
+    account_number: "${KIS_ACCOUNT}"
+    # Paper trading
+    paper_app_key: "${KIS_PAPER_APP_KEY}"
+    paper_app_secret: "${KIS_PAPER_APP_SECRET}"
+    paper_account_number: "${KIS_PAPER_ACCOUNT}"
+    hts_id: "${KIS_HTS_ID}"

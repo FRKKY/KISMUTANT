@@ -1,0 +1,41 @@
+# Render.com deployment configuration
+# This file auto-configures your deployment on Render
+
+services:
+  - type: web
+    name: living-trading-system
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter  # ~$7/month, always on
+    healthCheckPath: /api/status
+    envVars:
+      - key: PYTHON_ENV
+        value: production
+      - key: TZ
+        value: Asia/Seoul
+      # KIS API credentials (set these in Render dashboard)
+      - key: KIS_APP_KEY
+        sync: false
+      - key: KIS_APP_SECRET
+        sync: false
+      - key: KIS_ACCOUNT_NUMBER
+        sync: false
+      - key: KIS_ACCOUNT_PRODUCT_CODE
+        sync: false
+      - key: KIS_HTS_ID
+        sync: false
+      # Paper trading credentials
+      - key: KIS_PAPER_APP_KEY
+        sync: false
+      - key: KIS_PAPER_APP_SECRET
+        sync: false
+      - key: KIS_PAPER_ACCOUNT_NUMBER
+        sync: false
+      # Telegram
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # System
+      - key: TRADING_MODE
+        value: paper
