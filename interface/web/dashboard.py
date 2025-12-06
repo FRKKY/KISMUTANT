@@ -58,233 +58,82 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 active_connections: List[WebSocket] = []
 
 
-# === DATA PROVIDERS (mock for now) ===
+# === DATA PROVIDERS ===
 
 class DataProvider:
-    """Provides data to the dashboard. Connects to the actual system."""
+    """Provides data to the dashboard. Connects to KIS API."""
+    
+    _service = None
+    
+    @classmethod
+    def _get_service(cls):
+        """Get KIS service (lazy initialization)."""
+        if cls._service is None:
+            try:
+                from interface.kis_service import get_kis_service
+                cls._service = get_kis_service()
+            except Exception as e:
+                logger.error(f"Failed to get KIS service: {e}")
+                cls._service = None
+        return cls._service
     
     @staticmethod
     async def get_system_status() -> Dict[str, Any]:
         """Get current system status."""
+        service = DataProvider._get_service()
+        if service:
+            return await service.get_system_status()
         return {
             "mode": "paper",
             "state": "running",
-            "uptime": "2h 34m",
-            "market_status": "open",
+            "kis_connected": False,
             "last_update": datetime.now().strftime("%H:%M:%S")
         }
     
     @staticmethod
     async def get_portfolio() -> Dict[str, Any]:
         """Get portfolio summary."""
+        service = DataProvider._get_service()
+        if service and service.is_connected:
+            return await service.get_portfolio()
         return {
-            "total_equity": 10234500,
-            "cash": 2341200,
-            "positions_value": 7893300,
-            "unrealized_pnl": 156700,
-            "unrealized_pnl_pct": 1.53,
-            "daily_pnl": 42800,
-            "daily_pnl_pct": 0.42,
-            "weekly_pnl_pct": 1.23,
-            "monthly_pnl_pct": 3.87,
-            "drawdown": 2.1,
-            "max_drawdown": 5.4,
-            "high_water_mark": 10450000
+            "total_equity": 0, "cash": 0, "positions_value": 0,
+            "unrealized_pnl": 0, "unrealized_pnl_pct": 0,
+            "daily_pnl": 0, "daily_pnl_pct": 0,
+            "weekly_pnl_pct": 0, "monthly_pnl_pct": 0,
+            "drawdown": 0, "max_drawdown": 0, "high_water_mark": 0
         }
     
     @staticmethod
     async def get_positions() -> List[Dict[str, Any]]:
         """Get current positions."""
-        return [
-            {
-                "symbol": "069500",
-                "name": "KODEX 200",
-                "quantity": 15,
-                "avg_cost": 34250,
-                "current_price": 35038,
-                "market_value": 525570,
-                "pnl": 11820,
-                "pnl_pct": 2.3,
-                "weight": 5.1,
-                "hypothesis": "hyp_a3f2"
-            },
-            {
-                "symbol": "360750",
-                "name": "TIGER 미국S&P500",
-                "quantity": 8,
-                "avg_cost": 15200,
-                "current_price": 15367,
-                "market_value": 122936,
-                "pnl": 1336,
-                "pnl_pct": 1.1,
-                "weight": 1.2,
-                "hypothesis": "hyp_b7c1"
-            },
-            {
-                "symbol": "005930",
-                "name": "삼성전자",
-                "quantity": 5,
-                "avg_cost": 72000,
-                "current_price": 71712,
-                "market_value": 358560,
-                "pnl": -1440,
-                "pnl_pct": -0.4,
-                "weight": 3.5,
-                "hypothesis": "hyp_a3f2"
-            },
-        ]
+        service = DataProvider._get_service()
+        if service and service.is_connected:
+            return await service.get_positions()
+        return []
     
     @staticmethod
     async def get_hypotheses() -> List[Dict[str, Any]]:
-        """Get all hypotheses."""
-        return [
-            {
-                "id": "hyp_a3f2",
-                "name": "Momentum ETF Rotation",
-                "status": "active",
-                "allocation": 23.0,
-                "trades": 47,
-                "win_rate": 62.0,
-                "pnl": 234000,
-                "sharpe": 1.42,
-                "created": "2024-10-15",
-                "last_signal": "14:32"
-            },
-            {
-                "id": "hyp_b7c1",
-                "name": "Mean Reversion Bounce",
-                "status": "active",
-                "allocation": 18.0,
-                "trades": 32,
-                "win_rate": 58.0,
-                "pnl": 156000,
-                "sharpe": 1.18,
-                "created": "2024-10-22",
-                "last_signal": "11:15"
-            },
-            {
-                "id": "hyp_c9d4",
-                "name": "Volatility Breakout",
-                "status": "incubating",
-                "allocation": 5.0,
-                "trades": 12,
-                "win_rate": 54.0,
-                "pnl": 12000,
-                "sharpe": 0.89,
-                "created": "2024-11-01",
-                "last_signal": "09:45"
-            },
-            {
-                "id": "hyp_d2e8",
-                "name": "Sector Rotation v2",
-                "status": "paper",
-                "allocation": 0.0,
-                "trades": 28,
-                "win_rate": 51.0,
-                "pnl": -8500,
-                "sharpe": 0.34,
-                "created": "2024-11-10",
-                "last_signal": "15:20"
-            },
-        ]
+        """Get all hypotheses - Phase 2+ feature."""
+        return []
     
     @staticmethod
     async def get_trades(limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent trades."""
-        return [
-            {
-                "id": "trd_001",
-                "timestamp": "2024-12-05 14:32:15",
-                "symbol": "069500",
-                "name": "KODEX 200",
-                "side": "buy",
-                "quantity": 15,
-                "price": 34250,
-                "value": 513750,
-                "hypothesis": "hyp_a3f2",
-                "status": "filled"
-            },
-            {
-                "id": "trd_002",
-                "timestamp": "2024-12-05 11:15:42",
-                "symbol": "091230",
-                "name": "TIGER 반도체",
-                "side": "sell",
-                "quantity": 10,
-                "price": 12340,
-                "value": 123400,
-                "hypothesis": "hyp_b7c1",
-                "status": "filled"
-            },
-            {
-                "id": "trd_003",
-                "timestamp": "2024-12-04 14:55:03",
-                "symbol": "005930",
-                "name": "삼성전자",
-                "side": "buy",
-                "quantity": 5,
-                "price": 72000,
-                "value": 360000,
-                "hypothesis": "hyp_a3f2",
-                "status": "filled"
-            },
-        ][:limit]
+        service = DataProvider._get_service()
+        if service and service.is_connected:
+            return await service.get_trades(limit)
+        return []
     
     @staticmethod
     async def get_decisions(limit: int = 20) -> List[Dict[str, Any]]:
-        """Get recent decisions."""
-        return [
-            {
-                "id": "dec_001",
-                "timestamp": "2024-12-05 14:32:00",
-                "type": "trade_entry",
-                "description": "Enter long position in KODEX 200",
-                "reasoning": "Momentum signal triggered - 20-day ROC above threshold",
-                "confidence": 0.72,
-                "outcome": "pending"
-            },
-            {
-                "id": "dec_002",
-                "timestamp": "2024-12-05 11:15:00",
-                "type": "trade_exit",
-                "description": "Exit TIGER 반도체 position",
-                "reasoning": "Stop loss triggered at -5% threshold",
-                "confidence": 0.95,
-                "outcome": "executed"
-            },
-            {
-                "id": "dec_003",
-                "timestamp": "2024-12-05 09:00:00",
-                "type": "allocation",
-                "description": "Increase allocation to hyp_a3f2",
-                "reasoning": "Rolling Sharpe ratio improved to 1.42",
-                "confidence": 0.68,
-                "outcome": "executed"
-            },
-        ][:limit]
+        """Get recent decisions - Phase 2+ feature."""
+        return []
     
     @staticmethod
     async def get_performance_chart() -> Dict[str, Any]:
         """Get equity curve data for charting."""
-        # Generate sample equity curve
-        dates = []
-        equity = []
-        base = 10000000
-        
-        for i in range(60):
-            date = datetime.now() - timedelta(days=59-i)
-            dates.append(date.strftime("%Y-%m-%d"))
-            # Simulate some growth with volatility
-            import random
-            base *= (1 + random.uniform(-0.02, 0.025))
-            equity.append(round(base))
-        
-        return {
-            "dates": dates,
-            "equity": equity,
-            "benchmark": [10000000 * (1 + 0.0003 * i) for i in range(60)]  # Simple benchmark
-        }
-
+        return {"dates": [], "equity": [], "benchmark": []}
 
 # === API ROUTES ===
 
