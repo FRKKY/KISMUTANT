@@ -25,9 +25,21 @@ class KISDataService:
                 logger.info("KIS credentials not configured - using mock data")
                 return
             
-            from execution.broker import KISBroker
-            self._broker = KISBroker(mode="paper")
+            # Import broker without importing events module
+            from execution.broker import KISBroker, KISCredentials
             
+            # Create credentials directly from environment
+            credentials = KISCredentials(
+                app_key=os.environ.get("KIS_PAPER_APP_KEY", ""),
+                app_secret=os.environ.get("KIS_PAPER_APP_SECRET", ""),
+                account_number=os.environ.get("KIS_PAPER_ACCOUNT_NUMBER", ""),
+                account_product_code=os.environ.get("KIS_PAPER_ACCOUNT_PRODUCT_CODE", "01"),
+                hts_id=os.environ.get("KIS_HTS_ID", "")
+            )
+            
+            self._broker = KISBroker(credentials=credentials, mode="paper")
+            
+            # Test connection
             if self._broker.test_connection():
                 self._connected = True
                 logger.info("✓ KIS API connected successfully")
