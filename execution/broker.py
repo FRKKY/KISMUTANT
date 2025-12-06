@@ -467,11 +467,10 @@ class KISBroker:
         """
         tr_id = "VTTC8434R" if self.mode == "paper" else "TTTC8434R"
         
-        # Handle account number format - might include product code or not
+        # Handle account number format
         account_num = self.credentials.account_number
         product_code = self.credentials.account_product_code
         
-        # If account number contains a dash, split it
         if "-" in account_num:
             parts = account_num.split("-")
             account_num = parts[0]
@@ -480,6 +479,50 @@ class KISBroker:
         params = {
             "CANO": account_num,
             "ACNT_PRDT_CD": product_code,
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "00",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": ""
+        }
+        
+        data = self._request(
+            method="GET",
+            endpoint="/uapi/domestic-stock/v1/trading/inquire-balance",
+            tr_id=tr_id,
+            params=params
+        )
+        
+        # Parse positions
+        positions = []
+        for item in data.get("output1", []):
+            if int(item.get("hldg_qty", 0)) > 0:
+                positions.append({
+                    "symbol": item.get("pdno", ""),
+                    "name": item.get("prdt_name", ""),
+                    "quantity": int(item.get("hldg_qty", 0)),
+                    "avg_cost": float(item.get("pchs_avg_pric", 0)),
+                    "current_price": float(item.get("prpr", 0)),
+                    "market_value": float(item.get("evlu_amt", 0)),
+                    "unrealized_pnl": float(item.get("evlu_pfls_amt", 0)),
+                    "unrealized_pnl_pct": float(item.get("evlu_pfls_rt", 0))
+                })
+        
+        # Parse account summary
+        summary = data.get("output2", [{}])[0] if data.get("output2") else {}
+        
+        return {
+            "cash": float(summary.get("dnca_tot_amt", 0)),
+            "total_equity": float(summary.get("tot_evlu_amt", 0)),
+            "positions_value": float(summary.get("scts_evlu_amt", 0)),
+            "unrealized_pnl": float(summary.get("evlu_pfls_smtl_amt", 0)),
+            "positions": positions,
+            "timestamp": datetime.now().isoformat()
+        }
     
     def get_order_history(
         self,
