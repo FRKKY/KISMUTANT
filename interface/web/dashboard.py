@@ -351,7 +351,7 @@ def create_default_templates():
                 <div class="text-gray-500 text-sm">Cash</div>
                 <div class="text-2xl font-bold">₩{{ "{:,.0f}".format(portfolio.cash) }}</div>
                 <div class="text-sm text-gray-500">
-                    {{ "{:.1f}".format(portfolio.cash / portfolio.total_equity * 100) }}% of portfolio
+                    {% if portfolio.total_equity > 0 %}{{ "{:.1f}".format(portfolio.cash / portfolio.total_equity * 100) }}%{% else %}0%{% endif %} of portfolio
                 </div>
             </div>
             <div class="bg-white rounded-lg shadow p-6">
