@@ -21,9 +21,6 @@ import httpx
 import yaml
 from loguru import logger
 
-from core.events import get_event_bus, emit_system_event, EventType
-
-
 # API Endpoints
 BASE_URL_REAL = "https://openapi.koreainvestment.com:9443"
 BASE_URL_PAPER = "https://openapivts.koreainvestment.com:29443"
