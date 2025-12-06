@@ -458,7 +458,7 @@ class KISBroker:
     
     # === ACCOUNT ===
     
-   def get_balance(self) -> Dict[str, Any]:
+    def get_balance(self) -> Dict[str, Any]:
         """
         Get account balance and positions.
         
