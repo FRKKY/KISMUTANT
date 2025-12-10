@@ -75,24 +75,31 @@ class EventType(Enum):
     DECISION_LOGGED = auto()
     PERFORMANCE_SNAPSHOT = auto()
 
-    # Add these new ones:
+    # === PERCEPTION ===
     PATTERN_DISCOVERED = "pattern_discovered"
     UNIVERSE_UPDATED = "universe_updated"
+
+    # === HYPOTHESIS ===
     STRATEGY_REGISTERED = "strategy_registered"
     STRATEGY_PROMOTED = "strategy_promoted"
     STRATEGY_DEMOTED = "strategy_demoted"
     STRATEGY_RETIRED = "strategy_retired"
+
+    # === SIGNALS ===
     SIGNAL_GENERATED = "signal_generated"
     SIGNAL_EXPIRED = "signal_expired"
 
-    # === POSITION EVENTS (Phase 4) ===
+    # === POSITIONS ===
     POSITION_OPENED = "position_opened"
     POSITION_CLOSED = "position_closed"
     POSITION_UPDATED = "position_updated"
     
-    # === VALIDATION EVENTS (Phase 5) ===
+    # === VALIDATION ===
     BACKTEST_COMPLETED = "backtest_completed"
     BACKTEST_FAILED = "backtest_failed"
+
+    # === ORCHESTRATOR ===
+    SYSTEM_ALERT = "system_alert"
 
 @dataclass
 class Event:
