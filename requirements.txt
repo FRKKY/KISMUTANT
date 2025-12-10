@@ -1,7 +1,7 @@
-# Living Trading System - Dependencies
+# KISMUTANT - Living Trading System
 # Install with: pip install -r requirements.txt
 
-# === CORE (Required) ===
+# === CORE ===
 python-dateutil>=2.8.2
 pytz>=2023.3
 pyyaml>=6.0.1
@@ -10,6 +10,7 @@ pydantic>=2.5.0
 # === DATA & COMPUTATION ===
 numpy>=1.24.0
 pandas>=2.0.0
+scipy>=1.11.0              # Phase 2: Statistical functions
 
 # === DATABASE ===
 sqlalchemy>=2.0.0
@@ -32,3 +33,9 @@ python-telegram-bot>=20.7
 
 # === TECHNICAL ANALYSIS ===
 ta>=0.10.2
+
+# === PHASE 3+ (uncomment when needed) ===
+# scikit-learn>=1.3.0       # Machine learning
+# optuna>=3.4.0             # Bayesian optimization
+# matplotlib>=3.8.0         # Visualization
+# plotly>=5.18.0            # Interactive charts
