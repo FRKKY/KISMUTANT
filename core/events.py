@@ -85,6 +85,11 @@ class EventType(Enum):
     SIGNAL_GENERATED = "signal_generated"
     SIGNAL_EXPIRED = "signal_expired"
 
+    # === POSITION EVENTS (Phase 4) ===
+    POSITION_OPENED = "position_opened"
+    POSITION_CLOSED = "position_closed"
+    POSITION_UPDATED = "position_updated"
+
 @dataclass
 class Event:
     """Base event structure."""
