@@ -75,6 +75,15 @@ class EventType(Enum):
     DECISION_LOGGED = auto()
     PERFORMANCE_SNAPSHOT = auto()
 
+    # Add these new ones:
+    PATTERN_DISCOVERED = "pattern_discovered"
+    UNIVERSE_UPDATED = "universe_updated"
+    STRATEGY_REGISTERED = "strategy_registered"
+    STRATEGY_PROMOTED = "strategy_promoted"
+    STRATEGY_DEMOTED = "strategy_demoted"
+    STRATEGY_RETIRED = "strategy_retired"
+    SIGNAL_GENERATED = "signal_generated"
+    SIGNAL_EXPIRED = "signal_expired"
 
 @dataclass
 class Event:
