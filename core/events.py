@@ -89,6 +89,10 @@ class EventType(Enum):
     POSITION_OPENED = "position_opened"
     POSITION_CLOSED = "position_closed"
     POSITION_UPDATED = "position_updated"
+    
+    # === VALIDATION EVENTS (Phase 5) ===
+    BACKTEST_COMPLETED = "backtest_completed"
+    BACKTEST_FAILED = "backtest_failed"
 
 @dataclass
 class Event:
