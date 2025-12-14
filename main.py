@@ -258,7 +258,7 @@ async def run_web_only():
 async def db_check():
     """Check database status and contents."""
     from memory.models import get_database, get_database_url, PriceBar, Instrument, Hypothesis
-    from sqlalchemy import func
+    from sqlalchemy import func, text
 
     print("\n=== DATABASE DIAGNOSTIC ===\n")
 
@@ -292,7 +292,36 @@ async def db_check():
         db = get_database()
         session = db.get_session()
 
-        # Count records in each table
+        # First, list all tables in the database using raw SQL
+        print("\n--- Tables in Database ---")
+        if db.is_postgres:
+            result = session.execute(text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            ))
+            tables = [row[0] for row in result]
+        else:
+            result = session.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ))
+            tables = [row[0] for row in result]
+
+        if tables:
+            print(f"Found {len(tables)} tables: {', '.join(tables)}")
+        else:
+            print("NO TABLES FOUND!")
+
+        # Count records in each table using raw SQL
+        print("\n--- Row Counts (Raw SQL) ---")
+        for table in ['instruments', 'price_bars', 'hypotheses', 'signals', 'trades', 'orders']:
+            try:
+                result = session.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                count = result.scalar()
+                print(f"{table}: {count} rows")
+            except Exception as e:
+                print(f"{table}: ERROR - {e}")
+
+        # Count records using ORM
+        print("\n--- Row Counts (ORM) ---")
         instrument_count = session.query(func.count(Instrument.id)).scalar()
         bar_count = session.query(func.count(PriceBar.id)).scalar()
         hypothesis_count = session.query(func.count(Hypothesis.id)).scalar()
