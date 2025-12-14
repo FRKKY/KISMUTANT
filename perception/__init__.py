@@ -249,7 +249,7 @@ class PerceptionLayer:
             
             # Emit initialization complete event
             get_event_bus().publish(Event(
-                event_type=EventType.SYSTEM_STARTUP,
+                event_type=EventType.SYSTEM_STARTED,
                 source="perception_layer",
                 payload={
                     "message": "Perception Layer initialized",
@@ -594,6 +594,15 @@ class PerceptionLayer:
                     results[symbol] = bars
 
         logger.info(f"Parallel fetch complete: {len(results)}/{len(symbols)} successful")
+
+        # Log database statistics after fetch
+        db_stats = self.data_fetcher.get_db_stats()
+        if "error" not in db_stats:
+            logger.info(
+                f"DB verification: {db_stats.get('total_bars', 0):,} total bars, "
+                f"{db_stats.get('symbols_with_data', 0)} symbols"
+            )
+
         return results
 
 

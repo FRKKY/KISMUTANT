@@ -578,16 +578,20 @@ class DataFetcher:
         """Store OHLCV bars in database."""
         if not bars:
             return
-        
+
         session = self._db.get_session()
-        
+        stored_count = 0
+        updated_count = 0
+
         try:
+            symbol = bars[0].symbol if bars else "unknown"
+
             for bar in bars:
                 # Find instrument
                 instrument = session.query(Instrument).filter(
                     Instrument.symbol == bar.symbol
                 ).first()
-                
+
                 if not instrument:
                     # Create instrument if not exists
                     instrument = Instrument(
@@ -598,14 +602,14 @@ class DataFetcher:
                     )
                     session.add(instrument)
                     session.flush()
-                
+
                 # Check if bar exists
                 existing = session.query(PriceBar).filter(
                     PriceBar.instrument_id == instrument.id,
                     PriceBar.date == bar.timestamp.date(),
                     PriceBar.timeframe == bar.timeframe.value
                 ).first()
-                
+
                 if existing:
                     # Update
                     existing.open = bar.open
@@ -614,6 +618,7 @@ class DataFetcher:
                     existing.close = bar.close
                     existing.volume = bar.volume
                     existing.vwap = bar.vwap
+                    updated_count += 1
                 else:
                     # Insert
                     price_bar = PriceBar(
@@ -628,12 +633,17 @@ class DataFetcher:
                         vwap=bar.vwap
                     )
                     session.add(price_bar)
-            
+                    stored_count += 1
+
             session.commit()
-            
+            if stored_count > 0 or updated_count > 0:
+                logger.info(f"DB: Stored {stored_count} new, updated {updated_count} bars for {symbol}")
+
         except Exception as e:
             session.rollback()
             logger.error(f"Failed to store bars: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         finally:
             session.close()
 
@@ -657,6 +667,7 @@ class DataFetcher:
             ).first()
 
             if not instrument:
+                logger.debug(f"No instrument found for {symbol}")
                 return []
 
             # Calculate date range
@@ -672,6 +683,7 @@ class DataFetcher:
             ).order_by(PriceBar.date.asc()).all()
 
             if not db_bars:
+                logger.debug(f"No bars in DB for {symbol} (instrument_id={instrument.id})")
                 return []
 
             # Convert to OHLCVBar objects
