@@ -465,8 +465,7 @@ class PerceptionLayer:
             if symbols:
                 logger.info(f"Loaded {len(symbols)} symbols from cache")
                 # Also update universe manager
-                for symbol in symbols:
-                    self.universe._universe.add(symbol)
+                self.universe._universe = symbols
             return symbols
 
         except Exception as e:
