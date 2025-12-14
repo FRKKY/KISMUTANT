@@ -137,19 +137,18 @@ class LivingTradingSystem:
     def _init_web_dashboard(self):
         """Initialize web dashboard in background thread."""
         try:
-            from interface.web.dashboard import create_app
-            import uvicorn
-            
-            app = create_app(self.orchestrator)
+            from interface.web.dashboard import run_dashboard
+
             port = int(os.environ.get("PORT", 8080))
-            
-            def run_web():
-                uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
-            
-            self.web_server = threading.Thread(target=run_web, daemon=True)
+
+            self.web_server = threading.Thread(
+                target=run_dashboard,
+                kwargs={"host": "0.0.0.0", "port": port},
+                daemon=True
+            )
             self.web_server.start()
             logger.info(f"Web dashboard started on port {port}")
-            
+
         except Exception as e:
             logger.warning(f"Web dashboard failed to start: {e}")
     
@@ -217,12 +216,11 @@ class LivingTradingSystem:
 
 async def run_web_only():
     """Run only the web dashboard (for testing)."""
-    from interface.web.dashboard import create_app
+    from interface.web.dashboard import app
     import uvicorn
-    
-    app = create_app(orchestrator=None)
+
     port = int(os.environ.get("PORT", 8080))
-    
+
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
