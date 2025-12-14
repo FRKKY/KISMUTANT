@@ -136,10 +136,14 @@ class KISBroker:
         # HTTP client
         self._client = httpx.Client(timeout=30.0)
         
-        # Rate limiting - KIS API allows ~1-2 requests/second
+        # Rate limiting - KIS API allows ~1 request/second
         self._last_request_time = 0
-        self._min_request_interval = 0.5  # 500ms between requests to avoid rate limits
-        
+        self._min_request_interval = 1.0  # 1 second between requests to avoid rate limits
+
+        # Retry configuration for rate limit errors
+        self._max_retries = 3
+        self._base_retry_delay = 2.0  # Base delay for exponential backoff
+
         logger.info(f"KISBroker initialized in {mode} mode")
     
     def _rate_limit(self) -> None:
@@ -260,6 +264,13 @@ class KISBroker:
         
         return response.json()["HASH"]
     
+    def _is_rate_limit_error(self, data: Dict[str, Any]) -> bool:
+        """Check if the API response indicates a rate limit error."""
+        msg_cd = data.get("msg_cd", "")
+        msg1 = data.get("msg1", "")
+        # EGW00201: 초당 거래건수를 초과하였습니다 (Rate limit exceeded)
+        return msg_cd == "EGW00201" or "초당 거래건수" in msg1
+
     def _request(
         self,
         method: str,
@@ -269,35 +280,58 @@ class KISBroker:
         body: Dict[str, Any] = None,
         needs_hash: bool = False
     ) -> Dict[str, Any]:
-        """Make authenticated API request."""
-        self._rate_limit()
-        
-        url = f"{self.base_url}{endpoint}"
-        
-        hash_key = None
-        if needs_hash and body:
-            hash_key = self._get_hash_key(body)
-        
-        headers = self._get_headers(tr_id, hash_key)
-        
-        if method.upper() == "GET":
-            response = self._client.get(url, headers=headers, params=params)
-        else:
-            response = self._client.post(url, headers=headers, json=body)
-        
-        if response.status_code != 200:
-            logger.error(f"API request failed: {response.status_code} - {response.text}")
-            raise RuntimeError(f"API request failed: {response.text}")
-        
-        data = response.json()
-        
-        # Check for API-level errors
-        if data.get("rt_cd") != "0":
-            error_msg = data.get("msg1", "Unknown error")
-            logger.error(f"API error: {error_msg}")
-            raise RuntimeError(f"API error: {error_msg}")
-        
-        return data
+        """Make authenticated API request with retry logic for rate limits."""
+        last_error = None
+
+        for attempt in range(self._max_retries + 1):
+            self._rate_limit()
+
+            url = f"{self.base_url}{endpoint}"
+
+            hash_key = None
+            if needs_hash and body:
+                hash_key = self._get_hash_key(body)
+
+            headers = self._get_headers(tr_id, hash_key)
+
+            if method.upper() == "GET":
+                response = self._client.get(url, headers=headers, params=params)
+            else:
+                response = self._client.post(url, headers=headers, json=body)
+
+            if response.status_code != 200:
+                logger.error(f"API request failed: {response.status_code} - {response.text}")
+                raise RuntimeError(f"API request failed: {response.text}")
+
+            data = response.json()
+
+            # Check for API-level errors
+            if data.get("rt_cd") != "0":
+                # Check if it's a rate limit error
+                if self._is_rate_limit_error(data):
+                    if attempt < self._max_retries:
+                        # Exponential backoff: 2s, 4s, 8s
+                        delay = self._base_retry_delay * (2 ** attempt)
+                        logger.warning(
+                            f"Rate limit hit, retrying in {delay}s "
+                            f"(attempt {attempt + 1}/{self._max_retries + 1})"
+                        )
+                        time.sleep(delay)
+                        last_error = data.get("msg1", "Rate limit exceeded")
+                        continue
+                    else:
+                        error_msg = data.get("msg1", "Rate limit exceeded")
+                        logger.error(f"Rate limit exceeded after {self._max_retries + 1} attempts")
+                        raise RuntimeError(f"API request failed: {error_msg}")
+
+                error_msg = data.get("msg1", "Unknown error")
+                logger.error(f"API error: {error_msg}")
+                raise RuntimeError(f"API error: {error_msg}")
+
+            return data
+
+        # Should not reach here, but just in case
+        raise RuntimeError(f"API request failed after retries: {last_error}")
     
     # === MARKET DATA ===
     

@@ -87,11 +87,11 @@ class MarketSnapshot:
 @dataclass
 class DataFetcherConfig:
     """Configuration for data fetcher."""
-    
-    # Rate limiting
-    requests_per_second: float = 5.0  # KIS API limit
-    batch_size: int = 20              # Symbols per batch
-    batch_delay_seconds: float = 1.0  # Delay between batches
+
+    # Rate limiting - Conservative limits to avoid KIS API rate limits (EGW00201)
+    requests_per_second: float = 1.0  # 1 request per second (conservative)
+    batch_size: int = 10              # Smaller batches for safety
+    batch_delay_seconds: float = 2.0  # Longer delay between batches
     
     # Data retention
     daily_history_days: int = 756     # ~3 years of daily data

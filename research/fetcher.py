@@ -129,7 +129,7 @@ class PaperFetcher:
 
         query = f"({categories_query}) AND ({keywords_query})"
 
-        url = "http://export.arxiv.org/api/query"
+        url = "https://export.arxiv.org/api/query"
         params = {
             "search_query": query,
             "start": 0,
@@ -139,7 +139,7 @@ class PaperFetcher:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
 

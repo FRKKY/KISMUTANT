@@ -397,9 +397,10 @@ class UniverseManager:
                         self._etf_cache[symbol] = etf_info
                 except Exception as e:
                     logger.debug(f"Failed to fetch ETF {symbol}: {e}")
-                
-                # Rate limiting
-                await asyncio.sleep(0.15)
+
+                # Rate limiting - 1 second delay to avoid KIS API rate limits (EGW00201)
+                # Each _fetch_etf_info makes 2 API calls (get_price + get_daily_ohlcv)
+                await asyncio.sleep(1.0)
             
             logger.info(f"Discovered {len(discovered)} ETFs")
             
