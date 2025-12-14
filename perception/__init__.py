@@ -153,6 +153,9 @@ class PerceptionLayer:
         }
 
         try:
+            # Migration: Fix any existing instruments that aren't marked as tradeable
+            await self._fix_instrument_tradeability()
+
             # Step 1: Get universe (cached or discover)
             if use_cached_universe:
                 logger.info("Step 1: Loading cached universe...")
@@ -456,6 +459,42 @@ class PerceptionLayer:
 
     # ===== CACHING AND PERFORMANCE HELPERS =====
 
+    async def _fix_instrument_tradeability(self) -> None:
+        """
+        Migration: Fix any existing instruments that aren't marked as tradeable.
+
+        This is needed because older versions didn't set is_tradeable=True when
+        creating instruments during bar storage.
+        """
+        try:
+            from memory.models import get_database, Instrument
+
+            db = get_database()
+            session = db.get_session()
+
+            # Find instruments with price bars but not marked as tradeable
+            from memory.models import PriceBar
+            from sqlalchemy import func
+
+            # Get all instrument IDs that have price bars
+            instruments_with_data = session.query(
+                PriceBar.instrument_id
+            ).distinct().subquery()
+
+            # Update instruments that have data but aren't tradeable
+            updated = session.query(Instrument).filter(
+                Instrument.id.in_(session.query(instruments_with_data)),
+                (Instrument.is_tradeable == False) | (Instrument.is_tradeable == None)
+            ).update({"is_tradeable": True}, synchronize_session=False)
+
+            session.commit()
+            if updated > 0:
+                logger.info(f"Migration: Fixed {updated} instruments (set is_tradeable=True)")
+            session.close()
+
+        except Exception as e:
+            logger.warning(f"Migration check failed (non-critical): {e}")
+
     async def _load_cached_universe(self) -> List[str]:
         """
         Load universe from database cache.
@@ -546,16 +585,44 @@ class PerceptionLayer:
         loaded_from_db = 0
 
         # First pass: check DB for each symbol
+        # KIS API typically returns ~30 days of daily data, so we only need
+        # a minimum of 20 bars to consider it sufficient for analysis
+        min_bars_required = 20
+
+        skipped_reasons = {"no_bars": 0, "not_enough_bars": 0, "not_recent": 0}
+
         for symbol in symbols:
             db_bars = self.data_fetcher._load_bars_from_db(symbol, Timeframe.DAILY, days)
-            if db_bars and len(db_bars) >= days * 0.5:
-                # Check if data is recent (within 2 days)
-                latest_date = self.data_fetcher.get_db_latest_date(symbol, Timeframe.DAILY)
-                if latest_date and (date.today() - latest_date).days <= 2:
+            if not db_bars:
+                skipped_reasons["no_bars"] += 1
+                symbols_needing_fetch.append(symbol)
+                continue
+
+            if len(db_bars) < min_bars_required:
+                skipped_reasons["not_enough_bars"] += 1
+                symbols_needing_fetch.append(symbol)
+                continue
+
+            # Check if data is recent (within 2 days for weekdays, 4 for weekends)
+            latest_date = self.data_fetcher.get_db_latest_date(symbol, Timeframe.DAILY)
+            if latest_date:
+                days_old = (date.today() - latest_date).days
+                # Allow more slack on weekends
+                is_recent = days_old <= 2 or (days_old <= 4 and date.today().weekday() in [0, 6])
+                if is_recent:
                     results[symbol] = db_bars
                     loaded_from_db += 1
                     continue
+                else:
+                    skipped_reasons["not_recent"] += 1
+            else:
+                skipped_reasons["not_recent"] += 1
             symbols_needing_fetch.append(symbol)
+
+        if sum(skipped_reasons.values()) > 0:
+            logger.info(f"DB check: no_bars={skipped_reasons['no_bars']}, "
+                       f"not_enough={skipped_reasons['not_enough_bars']}, "
+                       f"not_recent={skipped_reasons['not_recent']}")
 
         if loaded_from_db > 0:
             logger.info(f"Loaded {loaded_from_db} symbols from database")

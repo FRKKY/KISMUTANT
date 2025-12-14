@@ -598,7 +598,8 @@ class DataFetcher:
                         symbol=bar.symbol,
                         name=bar.symbol,
                         instrument_type="etf",
-                        market="KRX"
+                        market="KRX",
+                        is_tradeable=True  # Mark as tradeable for universe caching
                     )
                     session.add(instrument)
                     session.flush()
