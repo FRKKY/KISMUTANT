@@ -443,7 +443,111 @@ class KISBroker:
             })
         
         return sorted(bars, key=lambda x: x["date"])
-    
+
+    def get_daily_ohlcv_full(
+        self,
+        symbol: str,
+        start_date: str = None,
+        end_date: str = None,
+        max_records: int = 1000,
+        market: str = "J"
+    ) -> List[Dict[str, Any]]:
+        """
+        Get extended historical OHLCV data using chart API with pagination.
+
+        This endpoint supports fetching more historical data than the basic
+        inquire-daily-price endpoint (which is limited to ~100 records).
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date (YYYYMMDD)
+            end_date: End date (YYYYMMDD)
+            max_records: Maximum records to fetch (default 1000)
+            market: Market code (J=stock, ETF)
+
+        Returns:
+            List of OHLCV bars sorted by date ascending
+        """
+        tr_id = "FHKST03010100"  # Daily chart price - supports more history
+
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=365*3)).strftime("%Y%m%d")
+
+        all_bars = []
+        current_end = end_date
+
+        while len(all_bars) < max_records:
+            params = {
+                "FID_COND_MRKT_DIV_CODE": market,
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": start_date,
+                "FID_INPUT_DATE_2": current_end,
+                "FID_PERIOD_DIV_CODE": "D",  # Daily
+                "FID_ORG_ADJ_PRC": "0"  # Adjusted price
+            }
+
+            try:
+                data = self._request(
+                    method="GET",
+                    endpoint="/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+                    tr_id=tr_id,
+                    params=params
+                )
+            except Exception as e:
+                logger.warning(f"Chart API failed for {symbol}, falling back to basic API: {e}")
+                # Fall back to basic API
+                return self.get_daily_ohlcv(symbol, start_date, end_date)
+
+            output = data.get("output2", [])
+            if not output:
+                break
+
+            batch_bars = []
+            for item in output:
+                if not item.get("stck_bsop_date"):
+                    continue
+                batch_bars.append({
+                    "date": item["stck_bsop_date"],
+                    "open": float(item.get("stck_oprc", 0)),
+                    "high": float(item.get("stck_hgpr", 0)),
+                    "low": float(item.get("stck_lwpr", 0)),
+                    "close": float(item.get("stck_clpr", 0)),
+                    "volume": int(item.get("acml_vol", 0)),
+                    "change_pct": float(item.get("prdy_ctrt", 0))
+                })
+
+            if not batch_bars:
+                break
+
+            all_bars.extend(batch_bars)
+
+            # Check if we need to paginate (get older data)
+            oldest_date = min(bar["date"] for bar in batch_bars)
+            if oldest_date <= start_date:
+                break  # We've reached the start date
+
+            # Move end date back for next iteration
+            # Subtract 1 day from oldest date to avoid duplicates
+            oldest_dt = datetime.strptime(oldest_date, "%Y%m%d")
+            current_end = (oldest_dt - timedelta(days=1)).strftime("%Y%m%d")
+
+            # Rate limit between pagination requests
+            import time
+            time.sleep(0.5)
+
+        # Remove duplicates and sort
+        seen = set()
+        unique_bars = []
+        for bar in all_bars:
+            if bar["date"] not in seen:
+                seen.add(bar["date"])
+                unique_bars.append(bar)
+
+        logger.info(f"Fetched {len(unique_bars)} bars for {symbol} (requested up to {max_records})")
+        return sorted(unique_bars, key=lambda x: x["date"])
+
     def get_market_index(self, index_code: str = "0001") -> Dict[str, Any]:
         """
         Get market index data.

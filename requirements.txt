@@ -36,6 +36,9 @@ python-telegram-bot>=20.7
 # === TECHNICAL ANALYSIS ===
 ta>=0.10.2
 
+# === ALTERNATIVE DATA SOURCES ===
+finance-datareader>=0.9.50    # Korean market historical data (KRX, Naver)
+
 # === CLOUD STORAGE (optional) ===
 # boto3>=1.34.0             # AWS S3 support (uncomment for cloud backup)
 
