@@ -78,6 +78,30 @@ from validation import get_backtester, BacktestConfig
 # Memory
 from memory.journal import get_journal
 
+# Learning - Self-improvement components
+from learning import (
+    get_analyzer,
+    get_optimizer,
+    get_evolver,
+    get_regime_detector,
+    PerformanceAnalyzer,
+    ParameterOptimizer,
+    StrategyEvolver,
+    RegimeDetector
+)
+
+# Research - External knowledge acquisition
+from research import (
+    get_fetcher as get_paper_fetcher,
+    get_extractor,
+    get_research_generator,
+    get_knowledge_base,
+    PaperFetcher,
+    IdeaExtractor,
+    ResearchHypothesisGenerator,
+    KnowledgeBase
+)
+
 
 class OrchestratorState(str, Enum):
     """States of the orchestrator."""
@@ -91,36 +115,49 @@ class OrchestratorState(str, Enum):
 @dataclass
 class OrchestratorConfig:
     """Configuration for the orchestrator."""
-    
+
     # Capital
     initial_capital: float = 10_000_000  # ₩10M
-    
+
     # Timing
     market_open: time = time(9, 0)
     market_close: time = time(15, 30)
-    
+
     # Update frequencies (seconds)
     price_update_interval: int = 60      # Real-time price updates
     intraday_scan_interval: int = 300    # Pattern scan (5 min)
-    
+
     # Strategy limits
     max_live_strategies: int = 3
     max_paper_strategies: int = 10
-    
+
     # Auto-management
     auto_discover_patterns: bool = True
     auto_generate_hypotheses: bool = True
     auto_backtest: bool = True
     auto_promote: bool = True
-    
+
     # Risk
     daily_loss_limit_pct: float = 0.02   # Stop trading if down 2%
-    
+
     # Notifications
     send_telegram_alerts: bool = True
-    
+
     # Persistence
     save_state_interval: int = 300       # Save state every 5 minutes
+
+    # === Learning Module ===
+    learning_enabled: bool = True
+    performance_analysis_interval: int = 3600  # Analyze every hour
+    regime_detection_interval: int = 1800      # Check regime every 30 min
+    strategy_evolution_interval: int = 86400   # Evolve strategies daily
+    min_trades_for_analysis: int = 10          # Min trades before analyzing
+
+    # === Research Module ===
+    research_enabled: bool = True
+    paper_fetch_interval: int = 86400          # Fetch papers daily
+    max_papers_per_fetch: int = 20             # Papers per fetch
+    auto_generate_from_research: bool = True   # Auto-create strategies from papers
 
 
 class Orchestrator:
@@ -157,16 +194,31 @@ class Orchestrator:
         self._journal = get_journal()
         self._invariants = get_invariants()
         self._clock = get_clock()
-        
+
+        # Learning components (self-improvement)
+        self._performance_analyzer = get_analyzer()
+        self._parameter_optimizer = get_optimizer()
+        self._strategy_evolver = get_evolver()
+        self._regime_detector = get_regime_detector()
+
+        # Research components (knowledge acquisition)
+        self._paper_fetcher = get_paper_fetcher()
+        self._idea_extractor = get_extractor()
+        self._research_generator = get_research_generator()
+        self._knowledge_base = get_knowledge_base()
+
         # Tasks
         self._running = False
         self._tasks: List[asyncio.Task] = []
-        
+
         # Daily tracking
         self._daily_starting_equity: float = self.config.initial_capital
         self._daily_pnl: float = 0.0
-        
-        logger.info("Orchestrator created")
+
+        # Research tracking
+        self._last_research_fetch: Optional[datetime] = None
+
+        logger.info("Orchestrator created with learning and research modules")
     
     async def initialize(self) -> Dict[str, Any]:
         """
@@ -208,10 +260,26 @@ class Orchestrator:
             # Register event handlers
             self._register_event_handlers()
             summary["components"]["events"] = {"status": "ok"}
-            
+
+            # Initialize learning components
+            if self.config.learning_enabled:
+                summary["components"]["learning"] = {
+                    "status": "ok",
+                    "modules": ["analyzer", "optimizer", "evolver", "regime_detector"]
+                }
+                logger.info("Learning modules initialized")
+
+            # Initialize research components
+            if self.config.research_enabled:
+                summary["components"]["research"] = {
+                    "status": "ok",
+                    "modules": ["paper_fetcher", "idea_extractor", "hypothesis_generator", "knowledge_base"]
+                }
+                logger.info("Research modules initialized")
+
             self._state = OrchestratorState.STOPPED
             self._start_time = datetime.now()
-            
+
             logger.info("Orchestrator initialization complete")
             
         except Exception as e:
@@ -413,10 +481,27 @@ class Orchestrator:
     async def _on_position_closed(self, event: Event) -> None:
         """Handle position closed."""
         self._journal.log_trade(event.payload)
-        
+
         pnl = event.payload.get("realized_pnl", 0)
         self._daily_pnl += pnl
-        
+
+        # Feed trade data to learning module
+        if self.config.learning_enabled:
+            trade_data = event.payload
+            hypothesis_id = trade_data.get("hypothesis_id")
+            if hypothesis_id:
+                self._performance_analyzer.record_trade(
+                    strategy_id=hypothesis_id,
+                    trade={
+                        "symbol": trade_data.get("symbol"),
+                        "pnl": pnl,
+                        "return_pct": trade_data.get("return_pct", 0),
+                        "holding_period": trade_data.get("holding_period_days", 1),
+                        "exit_reason": trade_data.get("exit_reason", "unknown"),
+                        "timestamp": datetime.now()
+                    }
+                )
+
         # Check daily loss limit
         daily_return = self._daily_pnl / self._daily_starting_equity
         if daily_return < -self.config.daily_loss_limit_pct:
@@ -457,6 +542,22 @@ class Orchestrator:
             asyncio.create_task(self._position_monitor_loop()),
             asyncio.create_task(self._lifecycle_check_loop()),
         ]
+
+        # Add learning tasks if enabled
+        if self.config.learning_enabled:
+            self._tasks.extend([
+                asyncio.create_task(self._learning_loop()),
+                asyncio.create_task(self._regime_detection_loop()),
+                asyncio.create_task(self._strategy_evolution_loop()),
+            ])
+            logger.info("Learning background tasks started")
+
+        # Add research tasks if enabled
+        if self.config.research_enabled:
+            self._tasks.append(
+                asyncio.create_task(self._research_loop())
+            )
+            logger.info("Research background task started")
         
         # Wait for all tasks
         try:
@@ -690,11 +791,232 @@ class Orchestrator:
                 logger.error(f"Lifecycle check error: {e}")
                 await asyncio.sleep(3600)
     
+    # ===== Learning Background Loops =====
+
+    async def _learning_loop(self) -> None:
+        """Analyze strategy performance and learn from results."""
+        while self._running:
+            try:
+                # Get all strategies with enough trades
+                strategies = self._registry.get_all()
+
+                for hypothesis in strategies:
+                    strategy_id = hypothesis.hypothesis_id
+
+                    # Check if we have enough trades to analyze
+                    analyzer_stats = self._performance_analyzer.get_stats()
+                    trade_count = analyzer_stats.get("by_strategy", {}).get(strategy_id, {}).get("trade_count", 0)
+
+                    if trade_count >= self.config.min_trades_for_analysis:
+                        # Analyze performance
+                        analysis = self._performance_analyzer.analyze_strategy(strategy_id)
+
+                        if analysis:
+                            logger.info(
+                                f"Strategy {hypothesis.name}: "
+                                f"Win rate={analysis.get('win_rate', 0):.1%}, "
+                                f"Sharpe={analysis.get('sharpe_ratio', 0):.2f}"
+                            )
+
+                            # Store in knowledge base
+                            self._knowledge_base.add_hypothesis(hypothesis)
+
+                            # Check if optimization is needed
+                            if analysis.get("sharpe_ratio", 0) < 0.5:
+                                logger.info(f"Strategy {hypothesis.name} underperforming, suggesting optimization")
+                                suggestions = self._performance_analyzer.get_improvement_suggestions(strategy_id)
+                                for suggestion in suggestions[:3]:
+                                    logger.debug(f"  - {suggestion}")
+
+                await asyncio.sleep(self.config.performance_analysis_interval)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Learning loop error: {e}")
+                await asyncio.sleep(300)
+
+    async def _regime_detection_loop(self) -> None:
+        """Detect market regime and adjust strategy parameters."""
+        while self._running:
+            try:
+                if not self._perception:
+                    await asyncio.sleep(60)
+                    continue
+
+                # Get market data for regime detection (use a broad ETF like KODEX 200)
+                market_symbols = ["069500"]  # KODEX 200 as market proxy
+                for symbol in market_symbols:
+                    symbol_data = self._perception.get_symbol_data(symbol)
+                    if symbol_data:
+                        ohlcv, features = symbol_data
+                        regime = self._regime_detector.detect_regime(ohlcv)
+
+                        logger.info(
+                            f"Market regime: {regime.primary_regime.value} "
+                            f"(confidence={regime.confidence:.1%}, duration={regime.duration_days}d)"
+                        )
+
+                        # Get strategy adjustments based on regime
+                        for hypothesis in self._registry.get_by_state(StrategyState.LIVE):
+                            adjustments = self._regime_detector.get_strategy_adjustment(
+                                hypothesis.strategy_type if hasattr(hypothesis, 'strategy_type') else 'momentum'
+                            )
+
+                            if adjustments.get("position_size_mult", 1.0) != 1.0:
+                                logger.debug(
+                                    f"Strategy {hypothesis.name}: position size adjustment "
+                                    f"= {adjustments['position_size_mult']:.1%}"
+                                )
+                        break
+
+                await asyncio.sleep(self.config.regime_detection_interval)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Regime detection error: {e}")
+                await asyncio.sleep(300)
+
+    async def _strategy_evolution_loop(self) -> None:
+        """Evolve strategies using genetic algorithms."""
+        while self._running:
+            try:
+                now = datetime.now(KST)
+
+                # Run evolution after market close
+                if now.time() >= time(17, 0):
+                    # Get underperforming strategies
+                    strategies = self._registry.get_all()
+                    underperforming = []
+
+                    for hypothesis in strategies:
+                        if hypothesis.backtest_metrics:
+                            sharpe = hypothesis.backtest_metrics.get("sharpe_ratio", 0)
+                            if sharpe < 0.5:
+                                underperforming.append(hypothesis)
+
+                    if underperforming:
+                        logger.info(f"Found {len(underperforming)} underperforming strategies for evolution")
+
+                        # Initialize population from underperforming strategies
+                        for hypothesis in underperforming[:3]:  # Limit to 3
+                            strategy_type = getattr(hypothesis, 'strategy_type', 'momentum')
+                            base_params = hypothesis.parameters if hasattr(hypothesis, 'parameters') else {}
+
+                            self._strategy_evolver.initialize_population(
+                                strategy_type=strategy_type,
+                                base_params=base_params
+                            )
+
+                            # Run a few generations (lightweight)
+                            def mock_fitness(gene):
+                                # Simple fitness based on parameter quality
+                                score = 0.5
+                                if gene.parameters.get("stop_loss", 0.1) < 0.05:
+                                    score += 0.1
+                                if len(gene.indicators) >= 2:
+                                    score += 0.1
+                                return score
+
+                            best_gene = self._strategy_evolver.evolve(
+                                fitness_fn=mock_fitness,
+                                n_generations=5
+                            )
+
+                            logger.info(
+                                f"Evolution complete: best fitness = {best_gene.fitness:.3f}"
+                            )
+
+                    # Wait until next day
+                    await asyncio.sleep(self.config.strategy_evolution_interval)
+                else:
+                    await asyncio.sleep(3600)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Strategy evolution error: {e}")
+                await asyncio.sleep(3600)
+
+    # ===== Research Background Loop =====
+
+    async def _research_loop(self) -> None:
+        """Fetch academic papers and generate hypotheses from research."""
+        while self._running:
+            try:
+                now = datetime.now()
+
+                # Check if we should fetch (once per day)
+                should_fetch = (
+                    self._last_research_fetch is None or
+                    (now - self._last_research_fetch).total_seconds() >= self.config.paper_fetch_interval
+                )
+
+                if should_fetch:
+                    logger.info("Starting research paper fetch...")
+
+                    # Fetch papers from arXiv
+                    papers = await self._paper_fetcher.fetch_papers(
+                        max_results=self.config.max_papers_per_fetch
+                    )
+
+                    if papers:
+                        logger.info(f"Fetched {len(papers)} research papers")
+
+                        # Store papers in knowledge base
+                        for paper in papers:
+                            self._knowledge_base.add_paper(paper)
+
+                        # Extract trading ideas
+                        total_ideas = 0
+                        total_hypotheses = 0
+
+                        for paper in papers:
+                            ideas = self._idea_extractor.extract_ideas(paper)
+                            total_ideas += len(ideas)
+
+                            for idea in ideas:
+                                # Store idea
+                                self._knowledge_base.add_idea(idea)
+
+                                # Generate hypothesis if auto-generate enabled
+                                if self.config.auto_generate_from_research:
+                                    hypothesis = self._research_generator.generate_hypothesis(idea)
+
+                                    # Store hypothesis
+                                    self._knowledge_base.add_hypothesis(hypothesis)
+                                    total_hypotheses += 1
+
+                                    # Auto-backtest if enabled and data available
+                                    if self.config.auto_backtest and self._perception:
+                                        logger.debug(
+                                            f"Generated research hypothesis: {hypothesis.name}"
+                                        )
+
+                        logger.info(
+                            f"Research processing complete: "
+                            f"{len(papers)} papers -> {total_ideas} ideas -> {total_hypotheses} hypotheses"
+                        )
+
+                        # Save knowledge base
+                        self._knowledge_base.save()
+
+                    self._last_research_fetch = now
+
+                await asyncio.sleep(3600)  # Check every hour
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Research loop error: {e}")
+                await asyncio.sleep(3600)
+
     # ===== Status =====
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get orchestrator status."""
-        return {
+        status = {
             "state": self._state.value,
             "running_since": self._start_time.isoformat() if self._start_time else None,
             "market_open": is_market_open(),
@@ -705,6 +1027,29 @@ class Orchestrator:
             "registry": self._registry.get_stats(),
             "perception": self._perception.get_stats() if self._perception else None
         }
+
+        # Add learning stats if enabled
+        if self.config.learning_enabled:
+            status["learning"] = {
+                "performance_analyzer": self._performance_analyzer.get_stats(),
+                "regime_detector": self._regime_detector.export_state(),
+                "strategy_evolver": {
+                    "best_genes": len(self._strategy_evolver.get_best_genes()),
+                    "evolution_history": len(self._strategy_evolver.get_evolution_history())
+                }
+            }
+
+        # Add research stats if enabled
+        if self.config.research_enabled:
+            status["research"] = {
+                "knowledge_base": self._knowledge_base.get_stats(),
+                "paper_fetcher": self._paper_fetcher.get_stats(),
+                "idea_extractor": self._idea_extractor.get_stats(),
+                "hypothesis_generator": self._research_generator.get_stats(),
+                "last_fetch": self._last_research_fetch.isoformat() if self._last_research_fetch else None
+            }
+
+        return status
 
 
 # Singleton
