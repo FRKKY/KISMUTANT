@@ -636,9 +636,117 @@ class DataFetcher:
             logger.error(f"Failed to store bars: {e}")
         finally:
             session.close()
-    
+
+    def _load_bars_from_db(
+        self,
+        symbol: str,
+        timeframe: Timeframe = Timeframe.DAILY,
+        days: int = 365
+    ) -> List[OHLCVBar]:
+        """
+        Load price bars from database.
+
+        Returns bars sorted by date ascending.
+        """
+        session = self._db.get_session()
+
+        try:
+            # Find instrument
+            instrument = session.query(Instrument).filter(
+                Instrument.symbol == symbol
+            ).first()
+
+            if not instrument:
+                return []
+
+            # Calculate date range
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days)
+
+            # Query price bars
+            db_bars = session.query(PriceBar).filter(
+                PriceBar.instrument_id == instrument.id,
+                PriceBar.timeframe == timeframe.value,
+                PriceBar.date >= start_date,
+                PriceBar.date <= end_date
+            ).order_by(PriceBar.date.asc()).all()
+
+            if not db_bars:
+                return []
+
+            # Convert to OHLCVBar objects
+            bars = []
+            for db_bar in db_bars:
+                bar = OHLCVBar(
+                    symbol=symbol,
+                    timestamp=datetime.combine(db_bar.date, time(0, 0)),
+                    timeframe=timeframe,
+                    open=db_bar.open,
+                    high=db_bar.high,
+                    low=db_bar.low,
+                    close=db_bar.close,
+                    volume=db_bar.volume,
+                    vwap=db_bar.vwap
+                )
+                bars.append(bar)
+
+            logger.debug(f"Loaded {len(bars)} bars from DB for {symbol}")
+            return bars
+
+        except Exception as e:
+            logger.error(f"Failed to load bars from DB for {symbol}: {e}")
+            return []
+        finally:
+            session.close()
+
+    def get_db_bar_count(self, symbol: str, timeframe: Timeframe = Timeframe.DAILY) -> int:
+        """Get count of bars in database for a symbol."""
+        session = self._db.get_session()
+        try:
+            instrument = session.query(Instrument).filter(
+                Instrument.symbol == symbol
+            ).first()
+
+            if not instrument:
+                return 0
+
+            count = session.query(PriceBar).filter(
+                PriceBar.instrument_id == instrument.id,
+                PriceBar.timeframe == timeframe.value
+            ).count()
+
+            return count
+        except Exception as e:
+            logger.error(f"Failed to count bars: {e}")
+            return 0
+        finally:
+            session.close()
+
+    def get_db_latest_date(self, symbol: str, timeframe: Timeframe = Timeframe.DAILY) -> Optional[date]:
+        """Get the most recent date for a symbol in the database."""
+        session = self._db.get_session()
+        try:
+            instrument = session.query(Instrument).filter(
+                Instrument.symbol == symbol
+            ).first()
+
+            if not instrument:
+                return None
+
+            latest = session.query(PriceBar.date).filter(
+                PriceBar.instrument_id == instrument.id,
+                PriceBar.timeframe == timeframe.value
+            ).order_by(PriceBar.date.desc()).first()
+
+            return latest[0] if latest else None
+        except Exception as e:
+            logger.error(f"Failed to get latest date: {e}")
+            return None
+        finally:
+            session.close()
+
     # ===== DATA ACCESS =====
-    
+
     def get_cached_daily(self, symbol: str) -> List[OHLCVBar]:
         """Get cached daily data for a symbol."""
         return self._daily_cache.get(symbol) or []
@@ -662,21 +770,48 @@ class DataFetcher:
     ):
         """
         Get daily data as a pandas DataFrame.
-        
+
+        Data source priority: memory cache → database → API
         Returns DataFrame with columns: date, open, high, low, close, volume
         """
         import pandas as pd
-        
-        # Check cache first
+
+        # 1. Check memory cache first
         bars = self._daily_cache.get(symbol) or []
-        
-        if not bars or len(bars) < days * 0.8:
-            # Fetch from API
-            bars = await self.fetch_daily_history(symbol, days=days)
-        
+
+        if bars and len(bars) >= days * 0.8:
+            logger.debug(f"Using cached data for {symbol}: {len(bars)} bars")
+        else:
+            # 2. Try loading from database
+            db_bars = self._load_bars_from_db(symbol, Timeframe.DAILY, days)
+
+            if db_bars and len(db_bars) >= days * 0.5:
+                bars = db_bars
+                # Update memory cache
+                self._daily_cache.set(symbol, bars)
+                logger.debug(f"Loaded {symbol} from DB: {len(bars)} bars")
+
+                # Check if we need to fetch recent data (data might be stale)
+                latest_date = self.get_db_latest_date(symbol, Timeframe.DAILY)
+                if latest_date and (date.today() - latest_date).days > 1:
+                    # Fetch only missing recent data
+                    logger.debug(f"Fetching recent data for {symbol} since {latest_date}")
+                    recent_bars = await self.fetch_daily_history(
+                        symbol,
+                        start_date=latest_date + timedelta(days=1),
+                        end_date=date.today()
+                    )
+                    if recent_bars:
+                        bars.extend(recent_bars)
+                        self._daily_cache.set(symbol, bars)
+            else:
+                # 3. Fetch from API (will also store to DB)
+                logger.debug(f"Fetching {symbol} from API")
+                bars = await self.fetch_daily_history(symbol, days=days)
+
         if not bars:
             return pd.DataFrame()
-        
+
         data = [
             {
                 "date": bar.timestamp,
@@ -688,11 +823,11 @@ class DataFetcher:
             }
             for bar in bars
         ]
-        
+
         df = pd.DataFrame(data)
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
-        
+
         return df
     
     async def get_intraday_dataframe(
@@ -784,6 +919,51 @@ class DataFetcher:
                 "intraday_history_days": self._config.intraday_history_days
             }
         }
+
+    def get_db_stats(self) -> Dict[str, Any]:
+        """Get database statistics for price data."""
+        from sqlalchemy import func
+
+        session = self._db.get_session()
+        try:
+            # Count instruments
+            instrument_count = session.query(Instrument).count()
+
+            # Count total price bars
+            total_bars = session.query(PriceBar).count()
+
+            # Count by timeframe
+            daily_bars = session.query(PriceBar).filter(
+                PriceBar.timeframe == Timeframe.DAILY.value
+            ).count()
+
+            intraday_bars = total_bars - daily_bars
+
+            # Get date range
+            oldest = session.query(func.min(PriceBar.date)).scalar()
+            newest = session.query(func.max(PriceBar.date)).scalar()
+
+            # Symbols with data
+            symbols_with_data = session.query(
+                func.count(func.distinct(PriceBar.instrument_id))
+            ).scalar() or 0
+
+            return {
+                "instruments": instrument_count,
+                "total_bars": total_bars,
+                "daily_bars": daily_bars,
+                "intraday_bars": intraday_bars,
+                "symbols_with_data": symbols_with_data,
+                "date_range": {
+                    "oldest": oldest.isoformat() if oldest else None,
+                    "newest": newest.isoformat() if newest else None
+                }
+            }
+        except Exception as e:
+            logger.error(f"Failed to get DB stats: {e}")
+            return {"error": str(e)}
+        finally:
+            session.close()
 
 
 # Singleton instance

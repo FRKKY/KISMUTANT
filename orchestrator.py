@@ -78,6 +78,7 @@ from validation import get_backtester, BacktestConfig
 
 # Memory
 from memory.journal import get_journal
+from memory.models import get_database, Order, Trade, OrderSide, OrderStatus
 
 # Learning - Self-improvement components
 from learning import (
@@ -517,16 +518,20 @@ class Orchestrator:
                             take_profit=signal.take_profit,
                             signal_id=signal.signal_id
                         )
-                        
+
                         # Reserve capital
                         self._allocator.reserve_capital(
                             signal.hypothesis_id,
                             sizing.position_size_krw
                         )
-                        
+
                         # Add to daily risk
                         self._allocator.add_daily_risk(sizing.risk_pct)
-                        
+
+                        # Persist order and trade to database
+                        order_side = "buy" if side == PositionSide.LONG else "sell"
+                        self._persist_order_and_trade(order_result, signal, sizing, order_side)
+
                         logger.info(f"Executed {side.value} {symbol} x{sizing.position_size_shares}")
                 
                 except Exception as e:
@@ -554,7 +559,7 @@ class Orchestrator:
                             signal.price,
                             signal.signal_type.value
                         )
-                        
+
                         if closed:
                             # Release capital
                             self._allocator.release_capital(
@@ -562,14 +567,83 @@ class Orchestrator:
                                 closed.total_cost,
                                 closed.realized_pnl
                             )
-                            
+
+                            # Persist exit order and trade to database
+                            self._persist_order_and_trade(
+                                order_result, signal, position.quantity, side
+                            )
+
                             logger.info(
                                 f"Closed {symbol}: P&L ₩{closed.realized_pnl:,.0f}"
                             )
-                
+
                 except Exception as e:
                     logger.error(f"Exit execution failed: {e}")
-    
+
+    def _persist_order_and_trade(
+        self,
+        order_result: Dict[str, Any],
+        signal,
+        sizing,
+        side: str
+    ) -> None:
+        """Persist order and trade to database."""
+        import uuid
+        from datetime import datetime
+
+        try:
+            db = get_database()
+            session = db.get_session()
+
+            # Determine order side
+            order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+
+            # Create Order record
+            order = Order(
+                order_id=order_result.get("order_id", f"ord_{uuid.uuid4().hex[:12]}"),
+                symbol=signal.symbol,
+                side=order_side,
+                order_type=order_result.get("order_type", "market"),
+                quantity=sizing.position_size_shares if hasattr(sizing, 'position_size_shares') else sizing,
+                limit_price=order_result.get("price"),
+                status=OrderStatus.FILLED if order_result.get("success") else OrderStatus.FAILED,
+                filled_quantity=sizing.position_size_shares if hasattr(sizing, 'position_size_shares') and order_result.get("success") else 0,
+                filled_avg_price=signal.price,
+                created_at=datetime.now(),
+                filled_at=datetime.now() if order_result.get("success") else None,
+                hypothesis_id=signal.hypothesis_id,
+                signal_id=signal.signal_id,
+                broker_order_id=order_result.get("order_id"),
+                broker_response=order_result
+            )
+            session.add(order)
+
+            # Create Trade record if order was filled
+            if order_result.get("success"):
+                trade = Trade(
+                    trade_id=f"trd_{uuid.uuid4().hex[:12]}",
+                    order_id=order.order_id,
+                    symbol=signal.symbol,
+                    side=order_side,
+                    quantity=sizing.position_size_shares if hasattr(sizing, 'position_size_shares') else sizing,
+                    price=signal.price,
+                    executed_at=datetime.now(),
+                    hypothesis_id=signal.hypothesis_id,
+                    signal_id=signal.signal_id
+                )
+                session.add(trade)
+
+            session.commit()
+            logger.debug(f"Persisted order {order.order_id} to database")
+
+        except Exception as e:
+            logger.error(f"Failed to persist order/trade: {e}")
+            if session:
+                session.rollback()
+        finally:
+            if session:
+                session.close()
+
     async def _on_position_opened(self, event: Event) -> None:
         """Handle position opened."""
         self._journal.log_trade(event.payload)

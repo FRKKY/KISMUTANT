@@ -31,6 +31,7 @@ from hypothesis.models import (
 )
 from hypothesis.registry import get_registry
 from core.events import get_event_bus, Event, EventType
+from memory.models import get_database, Signal as DBSignal, SignalDirection
 
 
 @dataclass
@@ -270,11 +271,57 @@ class SignalGenerator:
     def _record_signal(
         self,
         hypothesis: Hypothesis,
-        symbol: str
+        symbol: str,
+        signal: Optional[TradingSignal] = None
     ) -> None:
         """Record that a signal was generated."""
         self._signal_times[hypothesis.hypothesis_id][symbol] = datetime.now()
         self._daily_counts[hypothesis.hypothesis_id] += 1
+
+        # Persist to database if signal provided
+        if signal:
+            self._persist_signal(signal)
+
+    def _persist_signal(self, signal: TradingSignal) -> None:
+        """Persist a trading signal to the database."""
+        try:
+            db = get_database()
+            session = db.get_session()
+
+            # Map signal type to direction
+            direction_map = {
+                SignalType.LONG_ENTRY: SignalDirection.LONG,
+                SignalType.SHORT_ENTRY: SignalDirection.SHORT,
+                SignalType.LONG_EXIT: SignalDirection.CLOSE,
+                SignalType.SHORT_EXIT: SignalDirection.CLOSE,
+            }
+            direction = direction_map.get(signal.signal_type, SignalDirection.HOLD)
+
+            db_signal = DBSignal(
+                signal_id=signal.signal_id,
+                hypothesis_id=signal.hypothesis_id,
+                timestamp=signal.timestamp,
+                symbol=signal.symbol,
+                direction=direction,
+                strength=signal.confidence,
+                confidence=signal.confidence,
+                price_at_signal=signal.price,
+                features_snapshot=signal.metadata,
+                was_executed=False,
+                execution_reason=signal.reason
+            )
+
+            session.add(db_signal)
+            session.commit()
+            logger.debug(f"Persisted signal {signal.signal_id} to database")
+
+        except Exception as e:
+            logger.error(f"Failed to persist signal: {e}")
+            if session:
+                session.rollback()
+        finally:
+            if session:
+                session.close()
     
     def evaluate_hypothesis(
         self,
@@ -384,9 +431,9 @@ class SignalGenerator:
             }
         )
         
-        # Record signal
-        self._record_signal(hypothesis, symbol)
-        
+        # Record signal and persist to database
+        self._record_signal(hypothesis, symbol, signal)
+
         # Emit event
         get_event_bus().publish(Event(
             event_type=EventType.SIGNAL_GENERATED,
@@ -498,13 +545,16 @@ class SignalGenerator:
                     "pnl_pct": ((current_price / entry_price) - 1) * (1 if is_long else -1) * 100
                 }
             )
-            
+
+            # Persist exit signal to database
+            self._persist_signal(signal)
+
             get_event_bus().publish(Event(
                 event_type=EventType.SIGNAL_GENERATED,
                 source="signal_generator",
                 payload=signal.to_dict()
             ))
-            
+
             return signal
         
         return None

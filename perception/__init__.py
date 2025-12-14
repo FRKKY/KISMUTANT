@@ -262,11 +262,26 @@ class PerceptionLayer:
                 f"{len(filtered_symbols)} symbols, "
                 f"{feature_count} with features"
             )
-            
+
+            # Log database statistics
+            db_stats = self.data_fetcher.get_db_stats()
+            if "error" not in db_stats:
+                logger.info(
+                    f"Database stats: {db_stats['total_bars']:,} price bars "
+                    f"({db_stats['daily_bars']:,} daily, {db_stats['intraday_bars']:,} intraday) "
+                    f"for {db_stats['symbols_with_data']} symbols"
+                )
+                if db_stats['date_range']['oldest'] and db_stats['date_range']['newest']:
+                    logger.info(
+                        f"Data range: {db_stats['date_range']['oldest']} to "
+                        f"{db_stats['date_range']['newest']}"
+                    )
+                summary["db_stats"] = db_stats
+
         except Exception as e:
             logger.error(f"Perception initialization failed: {e}")
             summary["errors"].append(str(e))
-        
+
         return summary
     
     async def run_daily_update(self) -> Dict[str, Any]:
