@@ -121,20 +121,25 @@ class PerceptionLayer:
         use_cached_universe: bool = True,
         parallel_fetch: bool = True,
         skip_data_fetch: bool = False,
+        auto_load_history: bool = True,
+        auto_load_history_years: int = 3,
     ) -> Dict[str, Any]:
         """
         Initialize the perception layer.
 
         1. Discover ETF universe (or use cached)
         2. Apply filters
-        3. Fetch historical data (parallel or from cache)
-        4. Compute initial features
+        3. Check and auto-load historical data if needed
+        4. Fetch historical data (parallel or from cache)
+        5. Compute initial features
 
         Args:
             daily_history_days: Days of historical data to fetch
             use_cached_universe: Use cached universe from DB instead of discovering
             parallel_fetch: Fetch data in parallel (faster but more API calls)
             skip_data_fetch: Skip fetching, assume data is in database
+            auto_load_history: Automatically load historical data if insufficient
+            auto_load_history_years: Years of history to auto-load (default 3)
 
         Returns:
             Initialization summary
@@ -187,6 +192,14 @@ class PerceptionLayer:
             if not filtered_symbols:
                 logger.warning("No symbols passed filter!")
                 return summary
+
+            # Step 2.5: Auto-load historical data if needed
+            if auto_load_history:
+                await self._auto_load_historical_data(
+                    filtered_symbols,
+                    years=auto_load_history_years,
+                    summary=summary
+                )
 
             # Step 3: Fetch benchmark data first
             logger.info("Step 3: Fetching benchmark data...")
@@ -494,6 +507,105 @@ class PerceptionLayer:
 
         except Exception as e:
             logger.warning(f"Migration check failed (non-critical): {e}")
+
+    async def _auto_load_historical_data(
+        self,
+        symbols: List[str],
+        years: int = 3,
+        summary: Dict[str, Any] = None
+    ) -> None:
+        """
+        Automatically load historical data if insufficient data exists.
+
+        Checks the database for existing data and loads more if needed.
+        Uses FinanceDataReader and KIS API with pagination.
+
+        Args:
+            symbols: List of symbols to check/load
+            years: Years of history to load
+            summary: Summary dict to update with results
+        """
+        from perception.data_fetcher import Timeframe
+        from memory.models import get_database, PriceBar
+        from sqlalchemy import func
+
+        db = get_database()
+        session = db.get_session()
+
+        try:
+            # Calculate expected bars (250 trading days per year)
+            expected_bars_per_symbol = years * 250
+            min_required_bars = 200  # At least ~1 year to consider "sufficient"
+
+            # Check how many symbols have sufficient data
+            symbols_needing_data = []
+
+            for symbol in symbols:
+                bars = self.data_fetcher._load_bars_from_db(symbol, Timeframe.DAILY, years * 365)
+                bar_count = len(bars) if bars else 0
+
+                if bar_count < min_required_bars:
+                    symbols_needing_data.append((symbol, bar_count))
+
+            session.close()
+
+            if not symbols_needing_data:
+                logger.info(f"Historical data check: All {len(symbols)} symbols have sufficient data")
+                if summary:
+                    summary["auto_load_history"] = {
+                        "status": "skipped",
+                        "reason": "sufficient_data",
+                        "symbols_checked": len(symbols)
+                    }
+                return
+
+            # Log what needs loading
+            logger.info(f"Historical data check: {len(symbols_needing_data)}/{len(symbols)} symbols need more data")
+
+            # Only load if significant number of symbols need data (>20%)
+            if len(symbols_needing_data) < len(symbols) * 0.2:
+                logger.info("Less than 20% of symbols need data, skipping bulk load")
+                if summary:
+                    summary["auto_load_history"] = {
+                        "status": "skipped",
+                        "reason": "below_threshold",
+                        "symbols_needing_data": len(symbols_needing_data)
+                    }
+                return
+
+            logger.info(f"Starting auto-load of {years} years historical data for {len(symbols_needing_data)} symbols...")
+
+            # Use bulk_load_historical from data_fetcher
+            symbols_to_load = [s[0] for s in symbols_needing_data]
+            results = await self.data_fetcher.bulk_load_historical(
+                symbols=symbols_to_load,
+                years=years,
+                delay=0.3  # Slightly faster since this is startup
+            )
+
+            # Update summary
+            total_bars = sum(results.values())
+            successful = sum(1 for v in results.values() if v > min_required_bars)
+
+            logger.info(f"Auto-load complete: {successful}/{len(symbols_to_load)} symbols, {total_bars} total bars")
+
+            if summary:
+                summary["auto_load_history"] = {
+                    "status": "completed",
+                    "symbols_loaded": len(symbols_to_load),
+                    "symbols_successful": successful,
+                    "total_bars_loaded": total_bars
+                }
+
+        except Exception as e:
+            logger.error(f"Auto-load historical data failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            if summary:
+                summary["auto_load_history"] = {
+                    "status": "error",
+                    "error": str(e)
+                }
 
     async def _load_cached_universe(self) -> List[str]:
         """
