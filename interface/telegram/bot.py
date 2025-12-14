@@ -424,85 +424,214 @@ Max Drawdown: {portfolio['max_drawdown']:.2f}%
         await update.message.reply_text(msg.strip(), parse_mode="Markdown")
     
     # === DATA FETCHING (connects to system) ===
-    
+
     async def _get_system_status(self) -> Dict[str, Any]:
-        """Get current system status."""
-        # TODO: Connect to actual system
-        # For now, return mock data
-        return {
-            "mode": "Paper Trading",
-            "state": "Running",
-            "uptime": "2h 34m",
-            "total_equity": 10234500,
-            "cash": 2341200,
-            "position_count": 7,
-            "daily_pnl": 0.42,
-            "drawdown": 2.1,
-            "active_hypotheses": 12,
-            "incubating_hypotheses": 3,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
-        }
-    
+        """Get current system status from orchestrator."""
+        try:
+            from orchestrator import get_orchestrator
+            from core.clock import is_market_open
+
+            orch = get_orchestrator()
+            status = orch.get_status()
+
+            # Calculate uptime
+            uptime_seconds = status.get("uptime_seconds", 0)
+            hours = int(uptime_seconds // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+
+            return {
+                "mode": status.get("mode", "Unknown"),
+                "state": status.get("state", "Unknown"),
+                "uptime": f"{hours}h {minutes}m",
+                "total_equity": status.get("total_equity", 0),
+                "cash": status.get("cash", 0),
+                "position_count": status.get("position_count", 0),
+                "daily_pnl": status.get("daily_pnl_pct", 0),
+                "drawdown": status.get("drawdown_pct", 0),
+                "active_hypotheses": status.get("live_strategies", 0),
+                "incubating_hypotheses": status.get("paper_strategies", 0),
+                "timestamp": datetime.now().strftime("%H:%M:%S")
+            }
+        except Exception as e:
+            logger.debug(f"Could not get system status: {e}")
+            return {
+                "mode": "Unknown",
+                "state": "Not Connected",
+                "uptime": "N/A",
+                "total_equity": 0,
+                "cash": 0,
+                "position_count": 0,
+                "daily_pnl": 0,
+                "drawdown": 0,
+                "active_hypotheses": 0,
+                "incubating_hypotheses": 0,
+                "timestamp": datetime.now().strftime("%H:%M:%S")
+            }
+
     async def _get_portfolio(self) -> Dict[str, Any]:
-        """Get portfolio details."""
-        return {
-            "total_equity": 10234500,
-            "cash": 2341200,
-            "invested": 7893300,
-            "daily_pnl": 0.42,
-            "daily_pnl_krw": 42800,
-            "weekly_pnl": 1.23,
-            "monthly_pnl": 3.87,
-            "drawdown": 2.1,
-            "max_drawdown": 5.4,
-            "allocation_summary": "ETF 45% | Stocks 35% | Cash 20%"
-        }
-    
+        """Get portfolio details from orchestrator."""
+        try:
+            from orchestrator import get_orchestrator
+            orch = get_orchestrator()
+            status = orch.get_status()
+
+            total_equity = status.get("total_equity", 0)
+            cash = status.get("cash", 0)
+            invested = total_equity - cash
+
+            return {
+                "total_equity": total_equity,
+                "cash": cash,
+                "invested": invested,
+                "daily_pnl": status.get("daily_pnl_pct", 0),
+                "daily_pnl_krw": status.get("daily_pnl", 0),
+                "weekly_pnl": 0,  # Would need historical tracking
+                "monthly_pnl": 0,
+                "drawdown": status.get("drawdown_pct", 0),
+                "max_drawdown": status.get("max_drawdown_pct", 0),
+                "allocation_summary": f"Invested: {invested/total_equity*100:.0f}% | Cash: {cash/total_equity*100:.0f}%" if total_equity > 0 else "N/A"
+            }
+        except Exception as e:
+            logger.debug(f"Could not get portfolio: {e}")
+            return {
+                "total_equity": 0, "cash": 0, "invested": 0,
+                "daily_pnl": 0, "daily_pnl_krw": 0, "weekly_pnl": 0, "monthly_pnl": 0,
+                "drawdown": 0, "max_drawdown": 0, "allocation_summary": "N/A"
+            }
+
     async def _get_positions(self) -> List[Dict[str, Any]]:
-        """Get current positions."""
-        return [
-            {"symbol": "069500", "name": "KODEX 200", "quantity": 15, "avg_cost": 34250, "pnl_pct": 2.3, "pnl_krw": 11800},
-            {"symbol": "360750", "name": "TIGER 미국S&P500", "quantity": 8, "avg_cost": 15200, "pnl_pct": 1.1, "pnl_krw": 1340},
-            {"symbol": "005930", "name": "삼성전자", "quantity": 5, "avg_cost": 72000, "pnl_pct": -0.4, "pnl_krw": -1440},
-        ]
-    
+        """Get current positions from broker."""
+        try:
+            from execution.broker import KISBroker
+            broker = KISBroker()
+            positions = await broker.get_positions()
+
+            result = []
+            for pos in positions:
+                result.append({
+                    "symbol": pos.get("symbol", ""),
+                    "name": pos.get("name", pos.get("symbol", "")),
+                    "quantity": pos.get("quantity", 0),
+                    "avg_cost": pos.get("avg_cost", 0),
+                    "pnl_pct": pos.get("pnl_pct", 0),
+                    "pnl_krw": pos.get("pnl", 0),
+                })
+            return result
+        except Exception as e:
+            logger.debug(f"Could not get positions: {e}")
+            return []
+
     async def _get_hypotheses(self) -> List[Dict[str, Any]]:
-        """Get active hypotheses."""
-        return [
-            {"id": "hyp_a3f2", "status": "active", "allocation": 23.0, "win_rate": 62.0, "pnl": 234000},
-            {"id": "hyp_b7c1", "status": "active", "allocation": 18.0, "win_rate": 58.0, "pnl": 156000},
-            {"id": "hyp_c9d4", "status": "incubating", "allocation": 5.0, "win_rate": 54.0, "pnl": 12000},
-        ]
-    
+        """Get active hypotheses from registry."""
+        try:
+            from hypothesis import get_registry
+
+            registry = get_registry()
+            hypotheses = registry.get_all()
+
+            result = []
+            for hyp in hypotheses:
+                status = hyp.state.value if hasattr(hyp.state, 'value') else str(hyp.state)
+                metrics = hyp.backtest_metrics or {}
+
+                result.append({
+                    "id": hyp.hypothesis_id[:12],
+                    "status": status,
+                    "allocation": 0,  # Would need allocator
+                    "win_rate": metrics.get("win_rate", 0) * 100,
+                    "pnl": metrics.get("total_pnl", 0),
+                })
+            return result
+        except Exception as e:
+            logger.debug(f"Could not get hypotheses: {e}")
+            return []
+
     async def _get_recent_trades(self, count: int) -> List[Dict[str, Any]]:
-        """Get recent trades."""
-        return [
-            {"side": "buy", "symbol": "KODEX 200", "quantity": 15, "price": 34250, "time": "14:32"},
-            {"side": "sell", "symbol": "TIGER 반도체", "quantity": 10, "price": 12340, "time": "11:15"},
-        ][:count]
-    
+        """Get recent trades from database."""
+        try:
+            from memory.models import get_database, Trade
+
+            db = get_database()
+            session = db.get_session()
+
+            trades = session.query(Trade).order_by(Trade.executed_at.desc()).limit(count).all()
+
+            result = []
+            for trade in trades:
+                result.append({
+                    "side": trade.side.value if hasattr(trade.side, 'value') else str(trade.side),
+                    "symbol": trade.symbol,
+                    "quantity": trade.quantity,
+                    "price": trade.price,
+                    "time": trade.executed_at.strftime("%H:%M") if trade.executed_at else "N/A"
+                })
+
+            session.close()
+            return result
+        except Exception as e:
+            logger.debug(f"Could not get trades: {e}")
+            return []
+
     async def _get_recent_decisions(self, count: int) -> List[Dict[str, Any]]:
-        """Get recent decisions."""
-        return [
-            {"type": "TRADE_ENTRY", "description": "Buy KODEX 200 - Momentum signal", "confidence": 0.72, "time": "14:32"},
-            {"type": "RISK_REDUCTION", "description": "Reduced position in TIGER 반도체", "confidence": 0.85, "time": "11:15"},
-        ][:count]
-    
+        """Get recent decisions from database."""
+        try:
+            from memory.models import get_database, Decision
+
+            db = get_database()
+            session = db.get_session()
+
+            decisions = session.query(Decision).order_by(Decision.timestamp.desc()).limit(count).all()
+
+            result = []
+            for dec in decisions:
+                result.append({
+                    "type": dec.decision_type,
+                    "description": dec.description[:100] if dec.description else "N/A",
+                    "confidence": dec.confidence or 0,
+                    "time": dec.timestamp.strftime("%H:%M") if dec.timestamp else "N/A"
+                })
+
+            session.close()
+            return result
+        except Exception as e:
+            logger.debug(f"Could not get decisions: {e}")
+            return []
+
     async def _pause_system(self) -> bool:
         """Pause the trading system."""
-        # TODO: Connect to actual system
-        logger.info("System pause requested via Telegram")
-        return True
-    
+        try:
+            from orchestrator import get_orchestrator
+            orch = get_orchestrator()
+            await orch.pause()
+            logger.info("System paused via Telegram")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to pause system: {e}")
+            return False
+
     async def _resume_system(self) -> bool:
         """Resume the trading system."""
-        logger.info("System resume requested via Telegram")
-        return True
-    
+        try:
+            from orchestrator import get_orchestrator
+            orch = get_orchestrator()
+            await orch.resume()
+            logger.info("System resumed via Telegram")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to resume system: {e}")
+            return False
+
     async def _emergency_stop(self) -> bool:
         """Execute emergency stop."""
-        logger.warning("EMERGENCY STOP requested via Telegram")
-        return True
+        try:
+            from orchestrator import get_orchestrator
+            orch = get_orchestrator()
+            await orch.stop()
+            logger.warning("EMERGENCY STOP executed via Telegram")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to execute emergency stop: {e}")
+            return False
     
     # === ALERT SENDING ===
     

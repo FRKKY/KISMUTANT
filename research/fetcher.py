@@ -22,6 +22,7 @@ class PaperSource(str, Enum):
     ARXIV = "arxiv"
     SSRN = "ssrn"
     REPEC = "repec"
+    SEMANTIC_SCHOLAR = "semantic_scholar"  # Free academic API
 
 
 @dataclass
@@ -279,18 +280,263 @@ class PaperFetcher:
 
         return found
 
+    async def fetch_semantic_scholar(
+        self,
+        max_results: int = 30,
+    ) -> List[AcademicPaper]:
+        """
+        Fetch papers from Semantic Scholar API (free, no key required).
+        Searches for quantitative finance and trading papers.
+        """
+        papers = []
+
+        # Search queries for trading-related papers
+        search_queries = [
+            "algorithmic trading machine learning",
+            "momentum trading strategy",
+            "mean reversion stock market",
+            "portfolio optimization neural network",
+            "quantitative finance deep learning",
+        ]
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                for query in search_queries[:3]:  # Limit queries to avoid rate limits
+                    url = "https://api.semanticscholar.org/graph/v1/paper/search"
+                    params = {
+                        "query": query,
+                        "limit": max_results // 3,
+                        "fields": "paperId,title,abstract,authors,year,url,citationCount",
+                    }
+
+                    try:
+                        response = await client.get(url, params=params)
+                        if response.status_code == 429:
+                            logger.warning("Semantic Scholar rate limit hit, waiting...")
+                            await asyncio.sleep(5)
+                            continue
+                        response.raise_for_status()
+                        data = response.json()
+
+                        for item in data.get("data", []):
+                            try:
+                                paper = self._parse_semantic_scholar_entry(item)
+                                if paper and paper.paper_id not in self._papers:
+                                    paper.relevance_score = self._calculate_relevance(paper)
+                                    paper.trading_keywords = self._extract_keywords(paper)
+                                    self._papers[paper.paper_id] = paper
+                                    papers.append(paper)
+                            except Exception as e:
+                                logger.debug(f"Failed to parse Semantic Scholar entry: {e}")
+
+                        # Rate limit between queries
+                        await asyncio.sleep(1)
+
+                    except httpx.HTTPStatusError as e:
+                        logger.debug(f"Semantic Scholar query failed: {e}")
+                        continue
+
+            self._last_fetch[PaperSource.SEMANTIC_SCHOLAR] = datetime.utcnow()
+            logger.info(f"Fetched {len(papers)} papers from Semantic Scholar")
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Semantic Scholar papers: {e}")
+
+        return papers
+
+    def _parse_semantic_scholar_entry(self, data: Dict[str, Any]) -> Optional[AcademicPaper]:
+        """Parse a Semantic Scholar API response entry."""
+        try:
+            paper_id = data.get("paperId", "")
+            if not paper_id:
+                return None
+
+            title = data.get("title", "")
+            abstract = data.get("abstract", "") or ""
+
+            # Skip if no useful content
+            if not title or len(abstract) < 50:
+                return None
+
+            authors = []
+            for author in data.get("authors", []):
+                name = author.get("name", "")
+                if name:
+                    authors.append(name)
+
+            year = data.get("year")
+            published_date = datetime(year, 1, 1) if year else datetime.utcnow()
+
+            url = data.get("url", f"https://www.semanticscholar.org/paper/{paper_id}")
+
+            return AcademicPaper(
+                paper_id=f"ss:{paper_id}",
+                source=PaperSource.SEMANTIC_SCHOLAR,
+                title=title,
+                authors=authors[:5],  # Limit authors
+                abstract=abstract,
+                categories=["quantitative-finance"],
+                published_date=published_date,
+                url=url,
+            )
+        except Exception as e:
+            logger.debug(f"Error parsing Semantic Scholar entry: {e}")
+            return None
+
+    async def fetch_ssrn_rss(self, max_results: int = 20) -> List[AcademicPaper]:
+        """
+        Fetch papers from SSRN via RSS feed.
+        SSRN provides RSS feeds for various research networks.
+        """
+        papers = []
+
+        # SSRN RSS feeds for financial research
+        rss_urls = [
+            "https://papers.ssrn.com/sol3/Jeljour_results.cfm?form_name=journalBrowse&journal_id=3526834&Network=no&lim=false&npage=1&SortOrder=ab_approval_date&stype=rss",  # Quantitative Finance
+        ]
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                for rss_url in rss_urls:
+                    try:
+                        response = await client.get(rss_url)
+                        if response.status_code != 200:
+                            continue
+
+                        # Parse RSS XML
+                        root = ET.fromstring(response.text)
+                        channel = root.find("channel")
+                        if channel is None:
+                            continue
+
+                        for item in channel.findall("item")[:max_results]:
+                            try:
+                                paper = self._parse_ssrn_rss_item(item)
+                                if paper and paper.paper_id not in self._papers:
+                                    paper.relevance_score = self._calculate_relevance(paper)
+                                    paper.trading_keywords = self._extract_keywords(paper)
+                                    self._papers[paper.paper_id] = paper
+                                    papers.append(paper)
+                            except Exception as e:
+                                logger.debug(f"Failed to parse SSRN RSS item: {e}")
+
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch SSRN RSS: {e}")
+                        continue
+
+            self._last_fetch[PaperSource.SSRN] = datetime.utcnow()
+            logger.info(f"Fetched {len(papers)} papers from SSRN RSS")
+
+        except Exception as e:
+            logger.error(f"Failed to fetch SSRN papers: {e}")
+
+        return papers
+
+    def _parse_ssrn_rss_item(self, item: ET.Element) -> Optional[AcademicPaper]:
+        """Parse an SSRN RSS item."""
+        try:
+            title_elem = item.find("title")
+            title = title_elem.text if title_elem is not None and title_elem.text else ""
+
+            link_elem = item.find("link")
+            url = link_elem.text if link_elem is not None and link_elem.text else ""
+
+            # Extract paper ID from URL
+            paper_id = url.split("abstract_id=")[-1] if "abstract_id=" in url else url.split("/")[-1]
+
+            desc_elem = item.find("description")
+            abstract = desc_elem.text if desc_elem is not None and desc_elem.text else ""
+
+            # Clean HTML from description
+            import re
+            abstract = re.sub(r'<[^>]+>', '', abstract)
+
+            pub_date_elem = item.find("pubDate")
+            try:
+                from email.utils import parsedate_to_datetime
+                published_date = parsedate_to_datetime(pub_date_elem.text) if pub_date_elem is not None and pub_date_elem.text else datetime.utcnow()
+            except:
+                published_date = datetime.utcnow()
+
+            if not title or len(abstract) < 30:
+                return None
+
+            return AcademicPaper(
+                paper_id=f"ssrn:{paper_id}",
+                source=PaperSource.SSRN,
+                title=title,
+                authors=[],  # RSS doesn't include authors easily
+                abstract=abstract[:2000],  # Limit length
+                categories=["finance", "quantitative"],
+                published_date=published_date,
+                url=url,
+            )
+        except Exception as e:
+            logger.debug(f"Error parsing SSRN RSS item: {e}")
+            return None
+
     async def fetch_all_sources(self, max_per_source: int = 30) -> List[AcademicPaper]:
         """Fetch papers from all available sources."""
         all_papers = []
+        errors = []
 
-        # Fetch from arXiv
-        arxiv_papers = await self.fetch_arxiv_papers(max_results=max_per_source)
-        all_papers.extend(arxiv_papers)
+        # Fetch from arXiv (primary source)
+        try:
+            arxiv_papers = await self.fetch_arxiv_papers(max_results=max_per_source)
+            all_papers.extend(arxiv_papers)
+            logger.info(f"arXiv: fetched {len(arxiv_papers)} papers")
+        except Exception as e:
+            errors.append(f"arXiv: {e}")
+
+        # Small delay between sources
+        await asyncio.sleep(1)
+
+        # Fetch from Semantic Scholar
+        try:
+            ss_papers = await self.fetch_semantic_scholar(max_results=max_per_source)
+            all_papers.extend(ss_papers)
+            logger.info(f"Semantic Scholar: fetched {len(ss_papers)} papers")
+        except Exception as e:
+            errors.append(f"Semantic Scholar: {e}")
+
+        await asyncio.sleep(1)
+
+        # Fetch from SSRN RSS
+        try:
+            ssrn_papers = await self.fetch_ssrn_rss(max_results=max_per_source // 2)
+            all_papers.extend(ssrn_papers)
+            logger.info(f"SSRN: fetched {len(ssrn_papers)} papers")
+        except Exception as e:
+            errors.append(f"SSRN: {e}")
+
+        if errors:
+            logger.warning(f"Some sources failed: {errors}")
+
+        # Deduplicate by title similarity
+        all_papers = self._deduplicate_papers(all_papers)
 
         # Sort by relevance
         all_papers.sort(key=lambda p: p.relevance_score, reverse=True)
 
+        logger.info(f"Total unique papers fetched: {len(all_papers)}")
         return all_papers
+
+    def _deduplicate_papers(self, papers: List[AcademicPaper]) -> List[AcademicPaper]:
+        """Remove duplicate papers based on title similarity."""
+        seen_titles = set()
+        unique_papers = []
+
+        for paper in papers:
+            # Normalize title for comparison
+            normalized = paper.title.lower().strip()
+            # Remove common words for better matching
+            normalized = " ".join(w for w in normalized.split() if len(w) > 3)
+
+            if normalized not in seen_titles:
+                seen_titles.add(normalized)
+                unique_papers.append(paper)
+
+        return unique_papers
 
     def get_recent_papers(
         self,

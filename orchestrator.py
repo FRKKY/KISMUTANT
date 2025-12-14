@@ -954,15 +954,15 @@ class Orchestrator:
                 )
 
                 if should_fetch:
-                    logger.info("Starting research paper fetch...")
+                    logger.info("Starting research paper fetch from all sources...")
 
-                    # Fetch papers from arXiv
-                    papers = await self._paper_fetcher.fetch_arxiv_papers(
-                        max_results=self.config.max_papers_per_fetch
+                    # Fetch papers from all sources (arXiv, Semantic Scholar, SSRN)
+                    papers = await self._paper_fetcher.fetch_all_sources(
+                        max_per_source=self.config.max_papers_per_fetch
                     )
 
                     if papers:
-                        logger.info(f"Fetched {len(papers)} research papers")
+                        logger.info(f"Fetched {len(papers)} research papers from multiple sources")
 
                         # Store papers in knowledge base
                         for paper in papers:
