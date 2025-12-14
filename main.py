@@ -121,11 +121,11 @@ class LivingTradingSystem:
         
         if telegram_token and telegram_chat_id:
             try:
-                from interface.telegram.bot import TelegramBot
-                self.telegram_bot = TelegramBot(
-                    token=telegram_token,
-                    chat_id=telegram_chat_id,
-                    orchestrator=self.orchestrator
+                from interface.telegram.bot import TelegramInterface
+                self.telegram_bot = TelegramInterface(
+                    bot_token=telegram_token,
+                    authorized_chat_ids=[int(telegram_chat_id)],
+                    system_controller=self
                 )
                 await self.telegram_bot.start()
                 logger.info("Telegram bot started")

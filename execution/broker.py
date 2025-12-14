@@ -136,9 +136,9 @@ class KISBroker:
         # HTTP client
         self._client = httpx.Client(timeout=30.0)
         
-        # Rate limiting
+        # Rate limiting - KIS API allows ~1-2 requests/second
         self._last_request_time = 0
-        self._min_request_interval = 0.1  # 100ms between requests
+        self._min_request_interval = 0.5  # 500ms between requests to avoid rate limits
         
         logger.info(f"KISBroker initialized in {mode} mode")
     

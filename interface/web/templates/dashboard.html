@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Living Trading System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .positive { color: #10b981; }
+        .negative { color: #ef4444; }
+        .card { @apply bg-white rounded-lg shadow p-6; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="bg-gray-900 text-white p-4 shadow-lg">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <h1 class="text-xl font-bold">🤖 Living Trading System</h1>
+                <span class="px-3 py-1 rounded-full text-sm 
+                    {% if status.mode == 'paper' %}bg-yellow-500{% else %}bg-green-500{% endif %}">
+                    {{ status.mode | upper }}
+                </span>
+                <span class="px-3 py-1 rounded-full text-sm
+                    {% if status.state == 'running' %}bg-green-500{% else %}bg-red-500{% endif %}">
+                    {{ status.state | upper }}
+                </span>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="pauseSystem()" class="px-4 py-2 bg-yellow-600 rounded hover:bg-yellow-700">
+                    ⏸️ Pause
+                </button>
+                <button onclick="resumeSystem()" class="px-4 py-2 bg-green-600 rounded hover:bg-green-700">
+                    ▶️ Resume
+                </button>
+                <button onclick="stopSystem()" class="px-4 py-2 bg-red-600 rounded hover:bg-red-700">
+                    ⏹️ Stop
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-6">
+        <!-- Portfolio Overview -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">Total Equity</div>
+                <div class="text-2xl font-bold">₩{{ "{:,.0f}".format(portfolio.total_equity) }}</div>
+                <div class="text-sm {% if portfolio.daily_pnl_pct >= 0 %}positive{% else %}negative{% endif %}">
+                    {{ "{:+.2f}".format(portfolio.daily_pnl_pct) }}% today
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">Cash</div>
+                <div class="text-2xl font-bold">₩{{ "{:,.0f}".format(portfolio.cash) }}</div>
+                <div class="text-sm text-gray-500">
+                    {% if portfolio.total_equity > 0 %}{{ "{:.1f}".format(portfolio.cash / portfolio.total_equity * 100) }}%{% else %}0%{% endif %} of portfolio
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">Unrealized P&L</div>
+                <div class="text-2xl font-bold {% if portfolio.unrealized_pnl >= 0 %}positive{% else %}negative{% endif %}">
+                    ₩{{ "{:+,.0f}".format(portfolio.unrealized_pnl) }}
+                </div>
+                <div class="text-sm {% if portfolio.unrealized_pnl_pct >= 0 %}positive{% else %}negative{% endif %}">
+                    {{ "{:+.2f}".format(portfolio.unrealized_pnl_pct) }}%
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="text-gray-500 text-sm">Drawdown</div>
+                <div class="text-2xl font-bold text-red-500">{{ "{:.1f}".format(portfolio.drawdown) }}%</div>
+                <div class="text-sm text-gray-500">
+                    Max: {{ "{:.1f}".format(portfolio.max_drawdown) }}%
+                </div>
+            </div>
+        </div>
+
+        <!-- Two Column Layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <!-- Positions -->
+            <div class="bg-white rounded-lg shadow">
+                <div class="p-4 border-b flex justify-between items-center">
+                    <h2 class="font-bold text-lg">📋 Positions</h2>
+                    <span class="text-sm text-gray-500">{{ positions | length }} holdings</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                            <tr>
+                                <th class="p-3 text-left">Symbol</th>
+                                <th class="p-3 text-right">Qty</th>
+                                <th class="p-3 text-right">Value</th>
+                                <th class="p-3 text-right">P&L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pos in positions %}
+                            <tr class="border-t hover:bg-gray-50">
+                                <td class="p-3">
+                                    <div class="font-medium">{{ pos.name }}</div>
+                                    <div class="text-xs text-gray-500">{{ pos.symbol }}</div>
+                                </td>
+                                <td class="p-3 text-right">{{ pos.quantity }}</td>
+                                <td class="p-3 text-right">₩{{ "{:,.0f}".format(pos.market_value) }}</td>
+                                <td class="p-3 text-right {% if pos.pnl >= 0 %}positive{% else %}negative{% endif %}">
+                                    {{ "{:+.2f}".format(pos.pnl_pct) }}%
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Hypotheses -->
+            <div class="bg-white rounded-lg shadow">
+                <div class="p-4 border-b flex justify-between items-center">
+                    <h2 class="font-bold text-lg">🎯 Hypotheses</h2>
+                    <span class="text-sm text-gray-500">{{ hypotheses | length }} total</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                            <tr>
+                                <th class="p-3 text-left">ID</th>
+                                <th class="p-3 text-center">Status</th>
+                                <th class="p-3 text-right">Alloc</th>
+                                <th class="p-3 text-right">Win%</th>
+                                <th class="p-3 text-right">P&L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for hyp in hypotheses %}
+                            <tr class="border-t hover:bg-gray-50">
+                                <td class="p-3">
+                                    <div class="font-medium">{{ hyp.id }}</div>
+                                    <div class="text-xs text-gray-500">{{ hyp.name[:25] }}...</div>
+                                </td>
+                                <td class="p-3 text-center">
+                                    <span class="px-2 py-1 rounded-full text-xs
+                                        {% if hyp.status == 'active' %}bg-green-100 text-green-800
+                                        {% elif hyp.status == 'incubating' %}bg-yellow-100 text-yellow-800
+                                        {% elif hyp.status == 'paper' %}bg-gray-100 text-gray-800
+                                        {% else %}bg-red-100 text-red-800{% endif %}">
+                                        {{ hyp.status }}
+                                    </span>
+                                </td>
+                                <td class="p-3 text-right">{{ "{:.0f}".format(hyp.allocation) }}%</td>
+                                <td class="p-3 text-right">{{ "{:.0f}".format(hyp.win_rate) }}%</td>
+                                <td class="p-3 text-right {% if hyp.pnl >= 0 %}positive{% else %}negative{% endif %}">
+                                    ₩{{ "{:+,.0f}".format(hyp.pnl) }}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="bg-white rounded-lg shadow mb-6">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h2 class="font-bold text-lg">📜 Recent Trades</h2>
+                <a href="/trades" class="text-blue-500 hover:underline text-sm">View All</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                        <tr>
+                            <th class="p-3 text-left">Time</th>
+                            <th class="p-3 text-left">Side</th>
+                            <th class="p-3 text-left">Symbol</th>
+                            <th class="p-3 text-right">Qty</th>
+                            <th class="p-3 text-right">Price</th>
+                            <th class="p-3 text-right">Value</th>
+                            <th class="p-3 text-left">Hypothesis</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for trade in trades %}
+                        <tr class="border-t hover:bg-gray-50">
+                            <td class="p-3 text-sm text-gray-500">{{ trade.timestamp }}</td>
+                            <td class="p-3">
+                                <span class="px-2 py-1 rounded text-xs font-medium
+                                    {% if trade.side == 'buy' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+                                    {{ trade.side | upper }}
+                                </span>
+                            </td>
+                            <td class="p-3">
+                                <div class="font-medium">{{ trade.name }}</div>
+                            </td>
+                            <td class="p-3 text-right">{{ trade.quantity }}</td>
+                            <td class="p-3 text-right">₩{{ "{:,.0f}".format(trade.price) }}</td>
+                            <td class="p-3 text-right">₩{{ "{:,.0f}".format(trade.value) }}</td>
+                            <td class="p-3 text-sm text-gray-500">{{ trade.hypothesis }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white p-4 text-center text-sm">
+        <p>Living Trading System v0.1.0 | Last update: <span id="last-update">{{ status.last_update }}</span></p>
+    </footer>
+
+    <script>
+        // Control functions
+        async function pauseSystem() {
+            if (confirm('Pause the trading system?')) {
+                const res = await fetch('/api/control/pause', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message);
+                location.reload();
+            }
+        }
+
+        async function resumeSystem() {
+            if (confirm('Resume the trading system?')) {
+                const res = await fetch('/api/control/resume', { method: 'POST' });
+                const data = await res.json();
+                alert(data.message);
+                location.reload();
+            }
+        }
+
+        async function stopSystem() {
+            if (confirm('⚠️ EMERGENCY STOP - This will halt all trading. Continue?')) {
+                if (confirm('Are you absolutely sure?')) {
+                    const res = await fetch('/api/control/stop', { method: 'POST' });
+                    const data = await res.json();
+                    alert(data.message);
+                    location.reload();
+                }
+            }
+        }
+
+        // WebSocket for real-time updates
+        const ws = new WebSocket(`ws://${window.location.host}/ws`);
+        
+        ws.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === 'update') {
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+                // Could update more elements here
+            }
+        };
+
+        ws.onclose = function() {
+            console.log('WebSocket closed, reconnecting...');
+            setTimeout(() => location.reload(), 5000);
+        };
+    </script>
+</body>
+</html>
