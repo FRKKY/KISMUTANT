@@ -558,3 +558,63 @@ class HypothesisFactory:
             },
             tags=["trend", "crossover", "systematic"]
         )
+
+    @staticmethod
+    def from_research(research_hypothesis) -> "Hypothesis":
+        """
+        Convert a ResearchHypothesis to a Hypothesis for registry.
+
+        Args:
+            research_hypothesis: ResearchHypothesis object from research module
+
+        Returns:
+            Hypothesis object suitable for strategy registry
+        """
+        # Map string strategy type to enum
+        strategy_type_map = {
+            "momentum": StrategyType.MOMENTUM,
+            "mean_reversion": StrategyType.MEAN_REVERSION,
+            "breakout": StrategyType.BREAKOUT,
+            "trend_following": StrategyType.TREND_FOLLOWING,
+            "stat_arb": StrategyType.STATISTICAL_ARBITRAGE,
+            "volatility": StrategyType.VOLATILITY,
+            "multi_factor": StrategyType.MULTI_FACTOR,
+        }
+
+        strategy_type = strategy_type_map.get(
+            research_hypothesis.strategy_type,
+            StrategyType.MULTI_FACTOR
+        )
+
+        # Extract parameters with defaults
+        params = research_hypothesis.parameters.copy() if research_hypothesis.parameters else {}
+        stop_loss = params.get("stop_loss_pct", 0.05)
+        take_profit = params.get("take_profit_pct", 0.15)
+
+        # Build entry rules from logic string
+        entry_rules = {
+            "logic": research_hypothesis.entry_logic,
+            "source": "research",
+        }
+
+        # Build exit rules from logic string
+        exit_rules = {
+            "logic": research_hypothesis.exit_logic,
+            "stop_loss_pct": stop_loss,
+            "take_profit_pct": take_profit,
+        }
+
+        return Hypothesis(
+            hypothesis_id=research_hypothesis.hypothesis_id,
+            name=research_hypothesis.name,
+            description=research_hypothesis.description,
+            strategy_type=strategy_type,
+            source_research=research_hypothesis.source_paper_id,
+            symbols=[],  # Research hypotheses apply broadly, symbols assigned later
+            parameters=params,
+            entry_rules=entry_rules,
+            exit_rules=exit_rules,
+            stop_loss_pct=stop_loss,
+            take_profit_pct=take_profit,
+            tags=["research", research_hypothesis.strategy_type]
+        )

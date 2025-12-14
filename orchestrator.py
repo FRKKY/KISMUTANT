@@ -372,7 +372,7 @@ class Orchestrator:
                 self._registry,
                 self._positions,
                 self._allocator,
-                {"mode": self._mode}
+                {"mode": getattr(self.broker, 'mode', 'paper')}
             )
 
             logger.info(f"State saved: {hypotheses_saved} hypotheses, {positions_saved} positions")
@@ -1157,16 +1157,24 @@ class Orchestrator:
 
                                 # Generate hypothesis if auto-generate enabled
                                 if self.config.auto_generate_from_research:
-                                    hypothesis = self._research_generator.generate_hypothesis(idea)
+                                    research_hypothesis = self._research_generator.generate_hypothesis(idea)
 
-                                    # Store hypothesis
-                                    self._knowledge_base.add_hypothesis(hypothesis)
+                                    # Store in knowledge base
+                                    self._knowledge_base.add_hypothesis(research_hypothesis)
                                     total_hypotheses += 1
+
+                                    # Convert and register in strategy registry for persistence
+                                    try:
+                                        registry_hypothesis = HypothesisFactory.from_research(research_hypothesis)
+                                        self._registry.register(registry_hypothesis)
+                                        logger.info(f"Registered research hypothesis: {registry_hypothesis.name}")
+                                    except ValueError as e:
+                                        logger.warning(f"Could not register hypothesis: {e}")
 
                                     # Auto-backtest if enabled and data available
                                     if self.config.auto_backtest and self._perception:
                                         logger.debug(
-                                            f"Generated research hypothesis: {hypothesis.name}"
+                                            f"Generated research hypothesis: {research_hypothesis.name}"
                                         )
 
                         logger.info(
