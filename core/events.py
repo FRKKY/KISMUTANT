@@ -189,27 +189,46 @@ class EventBus:
     def publish(self, event: Event) -> None:
         """
         Publish an event to all subscribed handlers.
-        
+
         Handles exceptions gracefully - one failing handler won't affect others.
+        Also schedules async handlers if there's a running event loop.
         """
         # Store in history
         self._event_history.append(event)
         if len(self._event_history) > self._max_history_size:
             self._event_history = self._event_history[-self._max_history_size:]
-        
+
         # Notify global handlers first
         for handler in self._global_handlers:
             try:
                 handler(event)
             except Exception as e:
                 logger.error(f"Global handler error: {e}")
-        
-        # Notify type-specific handlers
+
+        # Notify type-specific sync handlers
         for handler in self._handlers[event.event_type]:
             try:
                 handler(event)
             except Exception as e:
                 logger.error(f"Handler error for {event.event_type.name}: {e}")
+
+        # Schedule async handlers if event loop is running
+        async_handlers = self._async_handlers.get(event.event_type, [])
+        if async_handlers:
+            try:
+                loop = asyncio.get_running_loop()
+                for handler in async_handlers:
+                    loop.create_task(self._safe_async_call(handler, event))
+            except RuntimeError:
+                # No running event loop - skip async handlers
+                pass
+
+    async def _safe_async_call(self, handler: AsyncEventHandler, event: Event) -> None:
+        """Safely call an async handler with error handling."""
+        try:
+            await handler(event)
+        except Exception as e:
+            logger.error(f"Async handler error for {event.event_type.name}: {e}")
     
     async def publish_async(self, event: Event) -> None:
         """Publish an event and await async handlers."""

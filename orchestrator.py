@@ -223,26 +223,26 @@ class Orchestrator:
     def _register_event_handlers(self) -> None:
         """Register handlers for system events."""
         bus = get_event_bus()
-        
-        # Pattern discovered -> potentially create hypothesis
-        bus.subscribe(
+
+        # Pattern discovered -> potentially create hypothesis (async handler)
+        bus.subscribe_async(
             EventType.PATTERN_DISCOVERED,
             self._on_pattern_discovered
         )
-        
-        # Signal generated -> execute trade
-        bus.subscribe(
+
+        # Signal generated -> execute trade (async handler)
+        bus.subscribe_async(
             EventType.SIGNAL_GENERATED,
             self._on_signal_generated
         )
         
-        # Position events
-        bus.subscribe(EventType.POSITION_OPENED, self._on_position_opened)
-        bus.subscribe(EventType.POSITION_CLOSED, self._on_position_closed)
-        
-        # Strategy lifecycle
-        bus.subscribe(EventType.STRATEGY_PROMOTED, self._on_strategy_promoted)
-        bus.subscribe(EventType.STRATEGY_DEMOTED, self._on_strategy_demoted)
+        # Position events (async handlers)
+        bus.subscribe_async(EventType.POSITION_OPENED, self._on_position_opened)
+        bus.subscribe_async(EventType.POSITION_CLOSED, self._on_position_closed)
+
+        # Strategy lifecycle (async handlers)
+        bus.subscribe_async(EventType.STRATEGY_PROMOTED, self._on_strategy_promoted)
+        bus.subscribe_async(EventType.STRATEGY_DEMOTED, self._on_strategy_demoted)
     
     # ===== Event Handlers =====
     
