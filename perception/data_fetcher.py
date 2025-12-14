@@ -19,10 +19,53 @@ from dataclasses import dataclass, field
 from datetime import datetime, date, time, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
-from collections import deque
+from collections import deque, OrderedDict
 import statistics
+from threading import Lock
 
 from loguru import logger
+
+
+class BoundedCache:
+    """
+    Thread-safe LRU cache with maximum size.
+    Automatically evicts oldest entries when full.
+    """
+
+    def __init__(self, max_size: int = 100):
+        self.max_size = max_size
+        self._cache: OrderedDict = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key):
+        """Get item, moving it to end (most recently used)."""
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+
+    def set(self, key, value):
+        """Set item, evicting oldest if at capacity."""
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = value
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)  # Remove oldest
+
+    def __contains__(self, key):
+        return key in self._cache
+
+    def __len__(self):
+        return len(self._cache)
+
+    def items(self):
+        return list(self._cache.items())
+
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
 
 from memory.models import get_database, Instrument, PriceBar
 from core.events import get_event_bus, emit_price_update, Event, EventType
@@ -137,11 +180,11 @@ class DataFetcher:
         # Rate limiting
         self._request_times: deque = deque(maxlen=100)
         self._last_request_time = 0
-        
-        # Caches
-        self._price_cache: Dict[str, MarketSnapshot] = {}
-        self._daily_cache: Dict[str, List[OHLCVBar]] = {}
-        self._intraday_cache: Dict[Tuple[str, Timeframe], List[OHLCVBar]] = {}
+
+        # Bounded caches to prevent memory growth
+        self._price_cache = BoundedCache(max_size=200)      # Max 200 symbols
+        self._daily_cache = BoundedCache(max_size=100)      # Max 100 symbols
+        self._intraday_cache = BoundedCache(max_size=300)   # Max 300 symbol-timeframe pairs
         
         # Streaming state
         self._streaming = False
@@ -222,7 +265,7 @@ class DataFetcher:
                 bars.append(bar)
             
             # Cache
-            self._daily_cache[symbol] = bars
+            self._daily_cache.set(symbol, bars)
             
             # Store in database
             await self._store_bars(bars)
@@ -307,7 +350,7 @@ class DataFetcher:
             
             # Cache
             cache_key = (symbol, timeframe)
-            self._intraday_cache[cache_key] = bars
+            self._intraday_cache.set(cache_key, bars)
             
             # Store in database
             await self._store_bars(bars)
@@ -451,7 +494,7 @@ class DataFetcher:
             )
             
             # Cache
-            self._price_cache[symbol] = snapshot
+            self._price_cache.set(symbol, snapshot)
             
             # Emit event
             emit_price_update(
@@ -598,16 +641,16 @@ class DataFetcher:
     
     def get_cached_daily(self, symbol: str) -> List[OHLCVBar]:
         """Get cached daily data for a symbol."""
-        return self._daily_cache.get(symbol, [])
-    
+        return self._daily_cache.get(symbol) or []
+
     def get_cached_intraday(
         self,
         symbol: str,
         timeframe: Timeframe = Timeframe.MINUTE_5
     ) -> List[OHLCVBar]:
         """Get cached intraday data for a symbol."""
-        return self._intraday_cache.get((symbol, timeframe), [])
-    
+        return self._intraday_cache.get((symbol, timeframe)) or []
+
     def get_cached_price(self, symbol: str) -> Optional[MarketSnapshot]:
         """Get cached current price for a symbol."""
         return self._price_cache.get(symbol)
@@ -625,7 +668,7 @@ class DataFetcher:
         import pandas as pd
         
         # Check cache first
-        bars = self._daily_cache.get(symbol, [])
+        bars = self._daily_cache.get(symbol) or []
         
         if not bars or len(bars) < days * 0.8:
             # Fetch from API
@@ -660,7 +703,7 @@ class DataFetcher:
         """Get intraday data as a pandas DataFrame."""
         import pandas as pd
         
-        bars = self._intraday_cache.get((symbol, timeframe), [])
+        bars = self._intraday_cache.get((symbol, timeframe)) or []
         
         if not bars:
             bars = await self.fetch_intraday(symbol, timeframe)

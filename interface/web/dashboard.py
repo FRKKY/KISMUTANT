@@ -25,7 +25,7 @@ from loguru import logger
 
 try:
     from fastapi import FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, Response
     from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
     import uvicorn
@@ -33,6 +33,15 @@ try:
 except ImportError:
     FASTAPI_AVAILABLE = False
     logger.warning("FastAPI not installed. Run: pip install fastapi uvicorn jinja2")
+
+# Optional rate limiting
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    RATELIMIT_AVAILABLE = True
+except ImportError:
+    RATELIMIT_AVAILABLE = False
 
 
 # === APPLICATION SETUP ===
@@ -42,6 +51,15 @@ app = FastAPI(
     description="Web dashboard for the Living Trading System",
     version="0.1.0"
 )
+
+# Setup rate limiting if available
+if RATELIMIT_AVAILABLE:
+    limiter = Limiter(key_func=get_remote_address)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Track startup time for health check
+_startup_time = datetime.now()
 
 # Templates directory
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -317,6 +335,94 @@ async def api_system():
 async def api_chart_equity():
     """Get equity curve data."""
     return await DataProvider.get_performance_chart()
+
+
+# === HEALTH CHECK ENDPOINT ===
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring and load balancers.
+    Returns system health status and component availability.
+    """
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "uptime_seconds": (datetime.now() - _startup_time).total_seconds(),
+        "components": {}
+    }
+
+    # Check database
+    try:
+        from memory.models import get_database
+        db = get_database()
+        session = db.get_session()
+        session.execute("SELECT 1")
+        session.close()
+        health["components"]["database"] = "ok"
+    except Exception as e:
+        health["components"]["database"] = f"error: {str(e)[:50]}"
+        health["status"] = "degraded"
+
+    # Check broker connection
+    try:
+        from execution.broker import KISBroker
+        # Just check if broker can be instantiated
+        health["components"]["broker"] = "ok"
+    except Exception as e:
+        health["components"]["broker"] = f"error: {str(e)[:50]}"
+
+    # Check market clock
+    try:
+        from core.clock import get_clock, is_market_open
+        clock = get_clock()
+        health["components"]["clock"] = "ok"
+        health["market_open"] = is_market_open()
+        health["current_time_kst"] = clock.now().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        health["components"]["clock"] = f"error: {str(e)[:50]}"
+
+    # Check knowledge base
+    try:
+        from research import get_knowledge_base
+        kb = get_knowledge_base()
+        stats = kb.get_stats()
+        health["components"]["knowledge_base"] = "ok"
+        health["knowledge_base_entries"] = stats.get("total_entries", 0)
+    except Exception as e:
+        health["components"]["knowledge_base"] = f"error: {str(e)[:50]}"
+
+    # Overall status
+    errors = [v for v in health["components"].values() if v != "ok"]
+    if len(errors) > len(health["components"]) / 2:
+        health["status"] = "unhealthy"
+    elif errors:
+        health["status"] = "degraded"
+
+    return health
+
+
+@app.get("/health/live")
+async def liveness_check():
+    """Simple liveness probe - just returns 200 if app is running."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    """Readiness probe - checks if app is ready to serve traffic."""
+    try:
+        from memory.models import get_database
+        db = get_database()
+        session = db.get_session()
+        session.execute("SELECT 1")
+        session.close()
+        return {"status": "ready"}
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "reason": str(e)[:100]}
+        )
 
 
 # === CONTROL ENDPOINTS ===

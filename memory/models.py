@@ -129,6 +129,8 @@ class PriceBar(Base):
     __table_args__ = (
         UniqueConstraint("instrument_id", "date", "timeframe", name="unique_price_bar"),
         Index("idx_price_lookup", "instrument_id", "date"),
+        Index("idx_price_timeframe", "instrument_id", "date", "timeframe"),  # Composite for queries
+        Index("idx_recent_prices", "date", "timeframe"),  # For scanning recent data
     )
 
 
@@ -279,6 +281,8 @@ class Signal(Base):
     
     __table_args__ = (
         Index("idx_signal_lookup", "symbol", "timestamp"),
+        Index("idx_signal_hypothesis", "hypothesis_id", "timestamp"),  # For strategy analysis
+        Index("idx_signal_executed", "was_executed", "timestamp"),  # For execution analysis
     )
 
 
@@ -347,8 +351,14 @@ class Trade(Base):
     # Context
     market_conditions = Column(JSON)  # Market state at execution
     execution_notes = Column(Text)
-    
+
     position = relationship("Position", back_populates="trades")
+
+    __table_args__ = (
+        Index("idx_trade_time", "executed_at"),  # For time-based queries
+        Index("idx_trade_hypothesis", "hypothesis_id", "executed_at"),  # For strategy P&L
+        Index("idx_trade_symbol_time", "symbol", "executed_at"),  # For symbol history
+    )
 
 
 class Order(Base):

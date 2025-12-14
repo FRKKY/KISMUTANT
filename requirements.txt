@@ -27,6 +27,7 @@ fastapi>=0.104.0
 uvicorn>=0.24.0
 jinja2>=3.1.2
 python-multipart>=0.0.6
+slowapi>=0.1.9                # API rate limiting
 
 # === TELEGRAM BOT ===
 python-telegram-bot>=20.7

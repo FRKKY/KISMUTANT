@@ -155,7 +155,7 @@ class OrchestratorConfig:
 
     # === Research Module ===
     research_enabled: bool = True
-    paper_fetch_interval: int = 86400          # Fetch papers daily
+    paper_fetch_interval: int = 21600          # Fetch papers every 6 hours
     max_papers_per_fetch: int = 20             # Papers per fetch
     auto_generate_from_research: bool = True   # Auto-create strategies from papers
 
