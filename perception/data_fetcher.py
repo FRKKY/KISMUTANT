@@ -249,7 +249,11 @@ class DataFetcher:
                 start_date=start_date.strftime("%Y%m%d"),
                 end_date=end_date.strftime("%Y%m%d")
             )
-            
+
+            if not raw_data:
+                logger.warning(f"API returned no data for {symbol}")
+                return []
+
             bars = []
             for item in raw_data:
                 bar = OHLCVBar(
@@ -263,17 +267,21 @@ class DataFetcher:
                     volume=item["volume"]
                 )
                 bars.append(bar)
-            
+
+            logger.info(f"API FETCH: Got {len(bars)} bars for {symbol}")
+
             # Cache
             self._daily_cache.set(symbol, bars)
-            
+
             # Store in database
             await self._store_bars(bars)
-            
+
             return bars
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch daily data for {symbol}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     async def fetch_daily_history_batch(
@@ -577,15 +585,17 @@ class DataFetcher:
     async def _store_bars(self, bars: List[OHLCVBar]) -> None:
         """Store OHLCV bars in database."""
         if not bars:
+            logger.debug("_store_bars called with empty bars list")
             return
+
+        symbol = bars[0].symbol if bars else "unknown"
+        logger.info(f"DB STORE: Starting to store {len(bars)} bars for {symbol}")
 
         session = self._db.get_session()
         stored_count = 0
         updated_count = 0
 
         try:
-            symbol = bars[0].symbol if bars else "unknown"
-
             for bar in bars:
                 # Find instrument
                 instrument = session.query(Instrument).filter(
@@ -637,12 +647,18 @@ class DataFetcher:
                     stored_count += 1
 
             session.commit()
-            if stored_count > 0 or updated_count > 0:
-                logger.info(f"DB: Stored {stored_count} new, updated {updated_count} bars for {symbol}")
+            logger.info(f"DB STORE: Committed {stored_count} new, {updated_count} updated for {symbol}")
+
+            # Verify the data was actually stored
+            from sqlalchemy import func
+            verify_count = session.query(func.count(PriceBar.id)).filter(
+                PriceBar.instrument_id == instrument.id if instrument else -1
+            ).scalar()
+            logger.info(f"DB VERIFY: {symbol} now has {verify_count} bars in database")
 
         except Exception as e:
             session.rollback()
-            logger.error(f"Failed to store bars: {e}")
+            logger.error(f"DB STORE FAILED for {symbol}: {e}")
             import traceback
             logger.error(traceback.format_exc())
         finally:

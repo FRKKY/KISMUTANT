@@ -80,9 +80,25 @@ class LivingTradingSystem:
             # Verify connection
             if db.health_check():
                 logger.info(f"Database connection verified: {'PostgreSQL' if db.is_postgres else 'SQLite'}")
+
+                # Log database contents summary
+                from memory.models import PriceBar, Instrument, Hypothesis
+                from sqlalchemy import func
+                session = db.get_session()
+                try:
+                    bar_count = session.query(func.count(PriceBar.id)).scalar()
+                    inst_count = session.query(func.count(Instrument.id)).scalar()
+                    hyp_count = session.query(func.count(Hypothesis.id)).scalar()
+                    logger.info(f"DB contents: {inst_count} instruments, {bar_count} bars, {hyp_count} hypotheses")
+                    if bar_count > 0:
+                        latest = session.query(func.max(PriceBar.date)).scalar()
+                        earliest = session.query(func.min(PriceBar.date)).scalar()
+                        logger.info(f"DB date range: {earliest} to {latest}")
+                finally:
+                    session.close()
             else:
                 logger.error("Database health check failed!")
-            
+
             # 3. Initialize orchestrator
             logger.info("Initializing orchestrator...")
             from orchestrator import get_orchestrator, OrchestratorConfig
