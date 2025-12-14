@@ -60,6 +60,7 @@ from perception import (
 from hypothesis import (
     get_registry,
     get_signal_generator,
+    get_promoter,
     HypothesisFactory,
     StrategyState
 )
@@ -206,6 +207,9 @@ class Orchestrator:
         self._idea_extractor = get_extractor()
         self._research_generator = get_research_generator()
         self._knowledge_base = get_knowledge_base()
+
+        # Strategy promotion
+        self._promoter = get_promoter()
 
         # Tasks
         self._running = False
@@ -763,33 +767,77 @@ class Orchestrator:
                 await asyncio.sleep(30)
     
     async def _lifecycle_check_loop(self) -> None:
-        """Check strategy lifecycle (promote/demote) daily."""
+        """Check strategy lifecycle (promote/demote) using intelligent promoter."""
         while self._running:
             try:
                 now = datetime.now(KST)
-                
+
                 # Run after market close
                 if now.time() >= time(16, 0):
-                    # Evaluate all strategies
-                    results = self._registry.evaluate_all()
-                    
-                    if results.get("promoted") or results.get("demoted"):
+                    # Use intelligent promoter for evaluations
+                    results = self._promoter.evaluate_all()
+
+                    if results.get("promotions") or results.get("demotions") or results.get("retirements"):
                         logger.info(
                             f"Lifecycle check: "
-                            f"{len(results.get('promoted', []))} promoted, "
-                            f"{len(results.get('demoted', []))} demoted"
+                            f"{len(results.get('promotions', []))} promoted, "
+                            f"{len(results.get('demotions', []))} demoted, "
+                            f"{len(results.get('retirements', []))} retired"
                         )
-                    
+
+                        # Log promotion candidates for transparency
+                        candidates = self._promoter.get_promotion_candidates()
+                        if candidates:
+                            logger.debug(f"Promotion candidates: {len(candidates)}")
+                            for c in candidates[:5]:  # Top 5
+                                logger.debug(f"  - {c['hypothesis_id']}: score={c['priority_score']:.3f}")
+
+                    # Process any pending backtests
+                    next_backtest = self._promoter.get_next_backtest()
+                    if next_backtest and self._perception:
+                        await self._run_backtest(next_backtest)
+
                     # Wait until next day
                     await asyncio.sleep(3600 * 12)
                 else:
                     await asyncio.sleep(3600)
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Lifecycle check error: {e}")
                 await asyncio.sleep(3600)
+
+    async def _run_backtest(self, hypothesis_id: str) -> None:
+        """Run backtest for a queued hypothesis."""
+        hypothesis = self._registry.get(hypothesis_id)
+        if not hypothesis:
+            return
+
+        try:
+            # Gather data for symbols
+            data = {}
+            for symbol in hypothesis.symbols:
+                if self._perception:
+                    symbol_data = self._perception.get_symbol_data(symbol)
+                    if symbol_data:
+                        data[symbol] = symbol_data
+
+            if data:
+                result = self._backtester.run(hypothesis, data)
+                metrics = result.to_performance_metrics()
+
+                # Notify promoter of completed backtest
+                self._promoter.complete_backtest(hypothesis_id, metrics)
+
+                logger.info(
+                    f"Backtest complete for {hypothesis.name}: "
+                    f"Sharpe={metrics.sharpe_ratio:.2f}, "
+                    f"Return={metrics.total_return:.1%}"
+                )
+
+        except Exception as e:
+            logger.error(f"Backtest failed for {hypothesis_id}: {e}")
     
     # ===== Learning Background Loops =====
 
@@ -1048,6 +1096,9 @@ class Orchestrator:
                 "hypothesis_generator": self._research_generator.get_stats(),
                 "last_fetch": self._last_research_fetch.isoformat() if self._last_research_fetch else None
             }
+
+        # Add promoter stats
+        status["promoter"] = self._promoter.get_stats()
 
         return status
 

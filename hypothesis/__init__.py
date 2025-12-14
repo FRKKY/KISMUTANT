@@ -66,6 +66,14 @@ from hypothesis.signals import (
     get_signal_generator,
 )
 
+from hypothesis.promoter import (
+    StrategyPromoter,
+    PromoterConfig,
+    PromotionCandidate,
+    PromotionDecision,
+    get_promoter,
+)
+
 
 __all__ = [
     # Core types
@@ -95,4 +103,11 @@ __all__ = [
     'SignalGeneratorConfig',
     'RuleEvaluator',
     'get_signal_generator',
+
+    # Promoter
+    'StrategyPromoter',
+    'PromoterConfig',
+    'PromotionCandidate',
+    'PromotionDecision',
+    'get_promoter',
 ]
