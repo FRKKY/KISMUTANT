@@ -67,8 +67,21 @@ class LivingTradingSystem:
             
             # 2. Initialize database
             logger.info("Initializing database...")
-            from memory.models import get_database
-            get_database()  # Creates tables if needed
+            from memory.models import get_database, get_database_url
+
+            db_url = get_database_url()
+            if "postgresql" in db_url:
+                logger.info(f"Connecting to PostgreSQL: {db_url.split('@')[-1] if '@' in db_url else 'configured'}")
+            else:
+                logger.info("Using SQLite database (local)")
+
+            db = get_database()
+
+            # Verify connection
+            if db.health_check():
+                logger.info(f"Database connection verified: {'PostgreSQL' if db.is_postgres else 'SQLite'}")
+            else:
+                logger.error("Database health check failed!")
             
             # 3. Initialize orchestrator
             logger.info("Initializing orchestrator...")

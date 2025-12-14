@@ -628,8 +628,9 @@ class Database:
     def health_check(self) -> bool:
         """Check if database is accessible."""
         try:
+            from sqlalchemy import text
             with self.get_session() as session:
-                session.execute("SELECT 1")
+                session.execute(text("SELECT 1"))
             return True
         except Exception as e:
             logger.error(f"Database health check failed: {e}")

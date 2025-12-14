@@ -637,6 +637,7 @@ class Orchestrator:
             asyncio.create_task(self._signal_generation_loop()),
             asyncio.create_task(self._position_monitor_loop()),
             asyncio.create_task(self._lifecycle_check_loop()),
+            asyncio.create_task(self._state_persistence_loop()),  # Save state periodically
         ]
 
         # Add learning tasks if enabled
@@ -702,7 +703,37 @@ class Orchestrator:
         self._state = OrchestratorState.RUNNING
     
     # ===== Background Loops =====
-    
+
+    async def _state_persistence_loop(self) -> None:
+        """Periodically save state to database."""
+        logger.info(f"State persistence loop started (interval: {self.config.save_state_interval}s)")
+
+        while self._running:
+            try:
+                await asyncio.sleep(self.config.save_state_interval)
+
+                if not self._running:
+                    break
+
+                # Save state to database
+                logger.debug("Saving state to database...")
+                result = await self._save_state()
+
+                if result.get("status") == "ok":
+                    logger.info(
+                        f"State saved: {result.get('hypotheses_saved', 0)} hypotheses, "
+                        f"{result.get('positions_saved', 0)} positions"
+                    )
+                else:
+                    logger.warning(f"State save issue: {result.get('error', 'unknown')}")
+
+            except asyncio.CancelledError:
+                logger.info("State persistence loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"State persistence error: {e}")
+                await asyncio.sleep(60)  # Wait before retry
+
     async def _daily_update_loop(self) -> None:
         """Run daily data updates."""
         while self._running:
