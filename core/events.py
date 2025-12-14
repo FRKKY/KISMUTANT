@@ -14,7 +14,7 @@ Events are the primary way information flows through the system:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Generic, Awaitable
 from enum import Enum, auto
 from collections import defaultdict
 import asyncio
@@ -22,84 +22,57 @@ from loguru import logger
 import uuid
 
 
-class EventType(Enum):
-    """All possible event types in the system."""
+class EventType(str, Enum):
+    """All system event types."""
     
-    # Market Data Events
-    MARKET_OPEN = auto()
-    MARKET_CLOSE = auto()
-    PRICE_UPDATE = auto()
-    VOLUME_SPIKE = auto()
+    # === SYSTEM ===
+    SYSTEM_STARTED = "system_started"
+    SYSTEM_STOPPED = "system_stopped"
+    SYSTEM_ERROR = "system_error"
+    SYSTEM_ALERT = "system_alert"
+    HEARTBEAT = "heartbeat"
     
-    # Hypothesis Events
-    HYPOTHESIS_CREATED = auto()
-    HYPOTHESIS_SIGNAL = auto()
-    HYPOTHESIS_PROMOTED = auto()
-    HYPOTHESIS_RETIRED = auto()
-    HYPOTHESIS_UPDATED = auto()
+    # === MARKET ===
+    MARKET_OPEN = "market_open"
+    MARKET_CLOSE = "market_close"
+    MARKET_DATA = "market_data"
     
-    # Portfolio Events
-    POSITION_OPENED = auto()
-    POSITION_CLOSED = auto()
-    POSITION_ADJUSTED = auto()
-    PORTFOLIO_REBALANCED = auto()
+    # === ORDERS ===
+    ORDER_SUBMITTED = "order_submitted"
+    ORDER_FILLED = "order_filled"
+    ORDER_CANCELLED = "order_cancelled"
+    ORDER_REJECTED = "order_rejected"
+    ORDER_ERROR = "order_error"
     
-    # Order Events
-    ORDER_SUBMITTED = auto()
-    ORDER_FILLED = auto()
-    ORDER_PARTIAL_FILL = auto()
-    ORDER_CANCELLED = auto()
-    ORDER_REJECTED = auto()
-    ORDER_FAILED = auto()
-    
-    # Risk Events
-    DRAWDOWN_WARNING = auto()
-    DRAWDOWN_CRITICAL = auto()
-    DAILY_LOSS_LIMIT = auto()
-    CORRELATION_ALERT = auto()
-    CIRCUIT_BREAKER_TRIGGERED = auto()
-    
-    # Learning Events
-    PATTERN_DISCOVERED = auto()
-    PARAMETER_OPTIMIZED = auto()
-    STRATEGY_EVOLVED = auto()
-    REGIME_CHANGE_DETECTED = auto()
-    
-    # System Events
-    SYSTEM_STARTUP = auto()
-    SYSTEM_SHUTDOWN = auto()
-    SYSTEM_ERROR = auto()
-    HEARTBEAT = auto()
-    
-    # Meta Events
-    DECISION_LOGGED = auto()
-    PERFORMANCE_SNAPSHOT = auto()
-
-    # === PERCEPTION ===
-    PATTERN_DISCOVERED = "pattern_discovered"
-    UNIVERSE_UPDATED = "universe_updated"
-
-    # === HYPOTHESIS ===
-    STRATEGY_REGISTERED = "strategy_registered"
-    STRATEGY_PROMOTED = "strategy_promoted"
-    STRATEGY_DEMOTED = "strategy_demoted"
-    STRATEGY_RETIRED = "strategy_retired"
-
-    # === SIGNALS ===
-    SIGNAL_GENERATED = "signal_generated"
-    SIGNAL_EXPIRED = "signal_expired"
-
     # === POSITIONS ===
     POSITION_OPENED = "position_opened"
     POSITION_CLOSED = "position_closed"
     POSITION_UPDATED = "position_updated"
     
+    # === PERCEPTION ===
+    PATTERN_DISCOVERED = "pattern_discovered"
+    UNIVERSE_UPDATED = "universe_updated"
+    
+    # === HYPOTHESIS ===
+    STRATEGY_REGISTERED = "strategy_registered"
+    STRATEGY_PROMOTED = "strategy_promoted"
+    STRATEGY_DEMOTED = "strategy_demoted"
+    STRATEGY_RETIRED = "strategy_retired"
+    
+    # === SIGNALS ===
+    SIGNAL_GENERATED = "signal_generated"
+    SIGNAL_EXPIRED = "signal_expired"
+    
     # === VALIDATION ===
     BACKTEST_COMPLETED = "backtest_completed"
     BACKTEST_FAILED = "backtest_failed"
-
-    # === ORCHESTRATOR ===
-    SYSTEM_ALERT = "system_alert"
+    
+    # === INVARIANTS ===
+    INVARIANT_VIOLATED = "invariant_violated"
+    RISK_LIMIT_BREACH = "risk_limit_breach"
+    
+    # === JOURNAL ===
+    DECISION_LOGGED = "decision_logged"
 
 @dataclass
 class Event:
@@ -159,7 +132,7 @@ class RiskEvent(Event):
 
 # Type alias for event handlers
 EventHandler = Callable[[Event], None]
-AsyncEventHandler = Callable[[Event], asyncio.coroutine]
+AsyncEventHandler = Callable[[Event], Awaitable[None]]
 
 
 class EventBus:

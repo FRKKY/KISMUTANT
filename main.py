@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-LIVING TRADING SYSTEM - Main Entry Point
+KISMUTANT - Living Trading System
+Main Entry Point
 """
 
 import sys
@@ -12,123 +13,258 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from loguru import logger
 
+# Setup logging
 Path("logs").mkdir(exist_ok=True)
-
 logger.remove()
-logger.add(sys.stderr, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>", level="INFO")
-logger.add("logs/system_{time:YYYY-MM-DD}.log", rotation="00:00", retention="7 days", level="DEBUG")
+logger.add(
+    sys.stderr,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+    level="INFO"
+)
+logger.add(
+    "logs/system_{time:YYYY-MM-DD}.log",
+    rotation="00:00",
+    retention="30 days",
+    level="DEBUG"
+)
 
 
 class LivingTradingSystem:
+    """Main system controller."""
+    
     def __init__(self, mode: str = "paper"):
         self.mode = mode
         self.running = False
         self._shutdown_event = asyncio.Event()
+        
+        # Components
+        self.broker = None
+        self.orchestrator = None
         self.telegram_bot = None
-        logger.info(f"Initializing Living Trading System in {mode} mode")
+        self.web_server = None
+        
+        logger.info(f"Initializing KISMUTANT in {mode} mode")
     
-    def _get_telegram_config(self):
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-        if bot_token and chat_id:
+    async def initialize(self) -> bool:
+        """Initialize all system components."""
+        try:
+            # 1. Initialize broker
+            logger.info("Initializing broker connection...")
+            from execution.broker import KISBroker
+            
+            self.broker = KISBroker(paper_trading=(self.mode == "paper"))
+            
+            if not self.broker.connect():
+                logger.error("Failed to connect to broker")
+                return False
+            
+            logger.info(f"Broker connected: {self.mode} mode")
+            
+            # 2. Initialize database
+            logger.info("Initializing database...")
+            from memory.models import init_db
+            init_db()
+            
+            # 3. Initialize orchestrator
+            logger.info("Initializing orchestrator...")
+            from orchestrator import get_orchestrator, OrchestratorConfig
+            
+            # Get capital from broker or use default
             try:
-                return bot_token, int(chat_id)
-            except ValueError:
-                pass
-        try:
-            import yaml
-            with open("config/credentials.yaml", 'r') as f:
-                creds = yaml.safe_load(f)
-            tg = creds.get("notifications", {}).get("telegram", {})
-            token = tg.get("bot_token", "")
-            cid = tg.get("chat_id", "")
-            if token and "YOUR_" not in token:
-                return token, int(cid)
-        except:
-            pass
-        return None, None
-    
-    async def start_telegram(self):
-        bot_token, chat_id = self._get_telegram_config()
-        if not bot_token:
-            logger.info("Telegram not configured - skipping")
-            return
-        try:
-            from interface.telegram.bot import TelegramInterface
-            self.telegram_bot = TelegramInterface(bot_token=bot_token, authorized_chat_ids=[chat_id], system_controller=self)
-            await self.telegram_bot.start()
-            logger.info("✓ Telegram bot started")
+                balance = self.broker.get_balance()
+                initial_capital = balance.get("total_equity", 10_000_000)
+            except:
+                initial_capital = 10_000_000
+            
+            config = OrchestratorConfig(
+                initial_capital=initial_capital,
+                max_live_strategies=3,
+                max_paper_strategies=10,
+                auto_discover_patterns=True,
+                auto_generate_hypotheses=True,
+                auto_backtest=True,
+                auto_promote=(self.mode == "paper"),  # Auto-promote only in paper mode
+                daily_loss_limit_pct=0.02,
+                send_telegram_alerts=True
+            )
+            
+            self.orchestrator = get_orchestrator(self.broker, config)
+            
+            # Initialize orchestrator (loads data, computes features)
+            init_summary = await self.orchestrator.initialize()
+            logger.info(f"Orchestrator initialized: {init_summary}")
+            
+            # 4. Initialize Telegram bot
+            await self._init_telegram()
+            
+            # 5. Initialize web dashboard
+            self._init_web_dashboard()
+            
+            logger.info("All components initialized successfully")
+            return True
+            
         except Exception as e:
-            logger.error(f"Telegram bot failed: {e}")
+            logger.error(f"Initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    def start_web(self):
+    async def _init_telegram(self):
+        """Initialize Telegram bot."""
+        telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        
+        if telegram_token and telegram_chat_id:
+            try:
+                from interface.telegram.bot import TelegramBot
+                self.telegram_bot = TelegramBot(
+                    token=telegram_token,
+                    chat_id=telegram_chat_id,
+                    orchestrator=self.orchestrator
+                )
+                await self.telegram_bot.start()
+                logger.info("Telegram bot started")
+            except Exception as e:
+                logger.warning(f"Telegram bot failed to start: {e}")
+        else:
+            logger.info("Telegram not configured (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)")
+    
+    def _init_web_dashboard(self):
+        """Initialize web dashboard in background thread."""
         try:
-            from interface.web.dashboard import run_dashboard
+            from interface.web.dashboard import create_app
+            import uvicorn
+            
+            app = create_app(self.orchestrator)
             port = int(os.environ.get("PORT", 8080))
-            thread = threading.Thread(target=run_dashboard, kwargs={"host": "0.0.0.0", "port": port}, daemon=True)
-            thread.start()
-            logger.info(f"✓ Web dashboard started on port {port}")
-            return thread
+            
+            def run_web():
+                uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+            
+            self.web_server = threading.Thread(target=run_web, daemon=True)
+            self.web_server.start()
+            logger.info(f"Web dashboard started on port {port}")
+            
         except Exception as e:
-            logger.error(f"Web dashboard failed: {e}")
-            return None
+            logger.warning(f"Web dashboard failed to start: {e}")
     
     async def run(self):
+        """Run the main trading loop."""
         self.running = True
-        logger.info("System running. Press Ctrl+C to stop.")
-        while self.running and not self._shutdown_event.is_set():
-            await asyncio.sleep(10)
+        
+        # Setup signal handlers
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, self._handle_shutdown)
+        
+        logger.info("Starting main trading loop...")
+        
+        try:
+            # Start orchestrator
+            orchestrator_task = asyncio.create_task(self.orchestrator.start())
+            
+            # Wait for shutdown signal
+            await self._shutdown_event.wait()
+            
+            # Stop orchestrator
+            await self.orchestrator.stop()
+            orchestrator_task.cancel()
+            
+            try:
+                await orchestrator_task
+            except asyncio.CancelledError:
+                pass
+            
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            await self.shutdown()
+    
+    def _handle_shutdown(self):
+        """Handle shutdown signal."""
+        logger.info("Shutdown signal received")
+        self._shutdown_event.set()
     
     async def shutdown(self):
+        """Graceful shutdown."""
         logger.info("Shutting down...")
         self.running = False
-        self._shutdown_event.set()
+        
+        # Stop Telegram bot
         if self.telegram_bot:
             try:
                 await self.telegram_bot.stop()
             except:
                 pass
+        
+        # Disconnect broker
+        if self.broker:
+            try:
+                self.broker.disconnect()
+            except:
+                pass
+        
         logger.info("Shutdown complete")
+
+
+async def run_web_only():
+    """Run only the web dashboard (for testing)."""
+    from interface.web.dashboard import create_app
+    import uvicorn
     
-    def handle_signal(self, signum, frame):
-        logger.info(f"Received signal {signum}")
-        self._shutdown_event.set()
+    app = create_app(orchestrator=None)
+    port = int(os.environ.get("PORT", 8080))
+    
+    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Living Trading System")
-    parser.add_argument("--mode", choices=["paper", "live"], default=os.environ.get("TRADING_MODE", "paper"))
-    parser.add_argument("--web-only", action="store_true")
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="KISMUTANT - Living Trading System")
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "live"],
+        default="paper",
+        help="Trading mode (default: paper)"
+    )
+    parser.add_argument(
+        "--web-only",
+        action="store_true",
+        help="Run only the web dashboard"
+    )
+    
     args = parser.parse_args()
     
     if args.web_only:
-        from interface.web.dashboard import run_dashboard
-        run_dashboard()
+        logger.info("Starting web-only mode...")
+        await run_web_only()
         return
     
-    system = LivingTradingSystem(mode=args.mode)
-    signal.signal(signal.SIGINT, system.handle_signal)
-    signal.signal(signal.SIGTERM, system.handle_signal)
+    # Safety check for live mode
+    if args.mode == "live":
+        confirm = input("⚠️  LIVE TRADING MODE - Are you sure? Type 'yes' to confirm: ")
+        if confirm.lower() != "yes":
+            logger.info("Live trading cancelled")
+            return
     
-    try:
-        logger.info("=" * 50)
-        logger.info("LIVING TRADING SYSTEM - STARTING")
-        logger.info("=" * 50)
-        system.start_web()
-        await asyncio.sleep(2)
-        await system.start_telegram()
-        logger.info("=" * 50)
-        logger.info("SYSTEM READY")
-        logger.info("=" * 50)
+    # Create and run system
+    system = LivingTradingSystem(mode=args.mode)
+    
+    if await system.initialize():
         await system.run()
-    except KeyboardInterrupt:
-        logger.info("Interrupted")
-    finally:
-        await system.shutdown()
+    else:
+        logger.error("System initialization failed")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,11 @@ class Invariants:
 INVARIANTS: Final[Invariants] = Invariants()
 
 
+def get_invariants() -> Invariants:
+    """Get the singleton Invariants instance."""
+    return INVARIANTS
+
+
 class InvariantViolation(Exception):
     """Raised when any code attempts to violate an invariant."""
     
