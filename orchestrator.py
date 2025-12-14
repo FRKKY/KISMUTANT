@@ -858,9 +858,9 @@ class Orchestrator:
                         )
 
                         # Get strategy adjustments based on regime
-                        for hypothesis in self._registry.get_by_state(StrategyState.LIVE):
+                        for hypothesis in self._registry.get_live_strategies():
                             adjustments = self._regime_detector.get_strategy_adjustment(
-                                hypothesis.strategy_type if hasattr(hypothesis, 'strategy_type') else 'momentum'
+                                hypothesis.strategy_type.value if hasattr(hypothesis, 'strategy_type') else 'momentum'
                             )
 
                             if adjustments.get("position_size_mult", 1.0) != 1.0:
