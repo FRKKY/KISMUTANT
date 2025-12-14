@@ -16,7 +16,7 @@ from pathlib import Path
 from loguru import logger
 
 from research.fetcher import AcademicPaper, PaperSource
-from research.parser import ExtractedIdea, IdeaType
+from research.parser import ExtractedIdea, IdeaType, ConfidenceLevel
 from research.generator import ResearchHypothesis
 
 
@@ -387,7 +387,7 @@ class KnowledgeBase:
             with open(self.storage_path, 'r') as f:
                 data = json.load(f)
 
-            # Load entries
+            # Load entries and reconstruct objects
             for entry_id, entry_data in data.get("entries", {}).items():
                 entry = KnowledgeEntry(
                     entry_id=entry_data["entry_id"],
@@ -401,7 +401,74 @@ class KnowledgeBase:
                 self._entries[entry_id] = entry
                 self._index_entry(entry)
 
-            logger.info(f"Knowledge base loaded: {len(self._entries)} entries")
+                # Reconstruct actual objects from entry content
+                content = entry_data["content"]
+                if entry_data["entry_type"] == "hypothesis":
+                    try:
+                        hyp = ResearchHypothesis(
+                            hypothesis_id=content.get("hypothesis_id", entry_id),
+                            source_idea_id=content.get("source_idea_id", ""),
+                            source_paper_id=content.get("source_paper_id", ""),
+                            name=content.get("name", "Unknown"),
+                            description=content.get("description", ""),
+                            strategy_type=content.get("strategy_type", "momentum"),
+                            entry_logic=content.get("entry_logic", ""),
+                            exit_logic=content.get("exit_logic", ""),
+                            position_sizing=content.get("position_sizing", ""),
+                            parameters=content.get("parameters", {}),
+                            parameter_ranges=content.get("parameter_ranges", {}),
+                            expected_sharpe=content.get("expected_sharpe"),
+                            confidence_score=content.get("confidence_score", 0),
+                        )
+                        self._hypotheses[hyp.hypothesis_id] = hyp
+                    except Exception as e:
+                        logger.debug(f"Could not reconstruct hypothesis {entry_id}: {e}")
+
+                elif entry_data["entry_type"] == "idea":
+                    try:
+                        idea = ExtractedIdea(
+                            idea_id=content.get("idea_id", entry_id),
+                            source_paper_id=content.get("source_paper_id", ""),
+                            idea_type=IdeaType(content.get("idea_type", "other")),
+                            title=content.get("title", ""),
+                            description=content.get("description", ""),
+                            confidence=ConfidenceLevel(content.get("confidence", "low")),
+                            entry_conditions=content.get("entry_conditions", []),
+                            exit_conditions=content.get("exit_conditions", []),
+                            indicators=content.get("indicators", []),
+                            parameters=content.get("parameters", {}),
+                            claimed_sharpe=content.get("claimed_sharpe"),
+                            claimed_returns=content.get("claimed_returns"),
+                            keywords=content.get("keywords", []),
+                        )
+                        self._ideas[idea.idea_id] = idea
+                    except Exception as e:
+                        logger.debug(f"Could not reconstruct idea {entry_id}: {e}")
+
+                elif entry_data["entry_type"] == "paper":
+                    try:
+                        paper = AcademicPaper(
+                            paper_id=content.get("paper_id", entry_id),
+                            source=PaperSource(content.get("source", "arxiv")),
+                            title=content.get("title", ""),
+                            authors=content.get("authors", []),
+                            abstract=content.get("abstract", ""),
+                            categories=content.get("categories", []),
+                            published_date=datetime.fromisoformat(content.get("published_date", datetime.utcnow().isoformat())),
+                            url=content.get("url", ""),
+                            pdf_url=content.get("pdf_url"),
+                            relevance_score=content.get("relevance_score", 0),
+                            trading_keywords=content.get("trading_keywords", []),
+                        )
+                        self._papers[paper.paper_id] = paper
+                    except Exception as e:
+                        logger.debug(f"Could not reconstruct paper {entry_id}: {e}")
+
+            logger.info(
+                f"Knowledge base loaded: {len(self._entries)} entries, "
+                f"{len(self._papers)} papers, {len(self._ideas)} ideas, "
+                f"{len(self._hypotheses)} hypotheses"
+            )
 
         except Exception as e:
             logger.error(f"Failed to load knowledge base: {e}")

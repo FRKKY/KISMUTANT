@@ -266,8 +266,8 @@ async def api_research():
                 "id": idea_id,
                 "title": idea.title[:60] + "..." if len(idea.title) > 60 else idea.title,
                 "type": idea.idea_type.value if hasattr(idea.idea_type, 'value') else str(idea.idea_type),
-                "confidence": idea.confidence,
-                "actionable": idea.actionable
+                "confidence": idea.confidence.value if hasattr(idea.confidence, 'value') else str(idea.confidence),
+                "indicators": idea.indicators[:3] if idea.indicators else []
             })
 
         # Stats
