@@ -528,6 +528,7 @@ class PerceptionLayer:
         Fetch data for multiple symbols in parallel.
 
         Uses a semaphore to limit concurrent requests and respect rate limits.
+        Checks database first, only fetches from API if data is missing/stale.
 
         Args:
             symbols: Symbols to fetch
@@ -537,7 +538,35 @@ class PerceptionLayer:
         Returns:
             Dict of symbol -> bars
         """
+        from datetime import date, timedelta
+        from perception.data_fetcher import Timeframe
+
         results = {}
+        symbols_needing_fetch = []
+        loaded_from_db = 0
+
+        # First pass: check DB for each symbol
+        for symbol in symbols:
+            db_bars = self.data_fetcher._load_bars_from_db(symbol, Timeframe.DAILY, days)
+            if db_bars and len(db_bars) >= days * 0.5:
+                # Check if data is recent (within 2 days)
+                latest_date = self.data_fetcher.get_db_latest_date(symbol, Timeframe.DAILY)
+                if latest_date and (date.today() - latest_date).days <= 2:
+                    results[symbol] = db_bars
+                    loaded_from_db += 1
+                    continue
+            symbols_needing_fetch.append(symbol)
+
+        if loaded_from_db > 0:
+            logger.info(f"Loaded {loaded_from_db} symbols from database")
+
+        if not symbols_needing_fetch:
+            logger.info(f"All {len(symbols)} symbols loaded from database, no API fetch needed")
+            return results
+
+        logger.info(f"Fetching {len(symbols_needing_fetch)} symbols from API (DB had {loaded_from_db})")
+
+        # Second pass: fetch missing data from API
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def fetch_one(symbol: str) -> tuple:
@@ -551,8 +580,8 @@ class PerceptionLayer:
                     logger.debug(f"Parallel fetch failed for {symbol}: {e}")
                     return symbol, []
 
-        # Create tasks for all symbols
-        tasks = [fetch_one(symbol) for symbol in symbols]
+        # Create tasks for symbols needing fetch
+        tasks = [fetch_one(symbol) for symbol in symbols_needing_fetch]
 
         # Run in parallel
         completed = await asyncio.gather(*tasks, return_exceptions=True)

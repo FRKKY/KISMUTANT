@@ -393,6 +393,14 @@ class PerformanceAnalyzer:
             "exported_at": datetime.utcnow().isoformat(),
         }
 
+    def get_stats(self) -> Dict[str, Any]:
+        """Get analyzer statistics summary."""
+        return {
+            "total_trades_analyzed": len(self._trade_history),
+            "strategy_profiles": len(self._strategy_profiles),
+            "global_insights": len(self._insights),
+        }
+
 
 # Singleton accessor
 _analyzer_instance: Optional[PerformanceAnalyzer] = None

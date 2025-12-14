@@ -373,7 +373,7 @@ class Orchestrator:
                 self._registry,
                 self._positions,
                 self._allocator,
-                {"mode": getattr(self.broker, 'mode', 'paper')}
+                {"mode": getattr(self._broker, 'mode', 'paper')}
             )
 
             logger.info(f"State saved: {hypotheses_saved} hypotheses, {positions_saved} positions")
