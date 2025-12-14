@@ -14,6 +14,7 @@ scipy>=1.11.0              # Phase 2: Statistical functions
 
 # === DATABASE ===
 sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9      # PostgreSQL support for cloud deployment
 
 # === API & NETWORKING ===
 httpx>=0.25.0
@@ -34,6 +35,9 @@ python-telegram-bot>=20.7
 
 # === TECHNICAL ANALYSIS ===
 ta>=0.10.2
+
+# === CLOUD STORAGE (optional) ===
+# boto3>=1.34.0             # AWS S3 support (uncomment for cloud backup)
 
 # === PHASE 3+ (uncomment when needed) ===
 # scikit-learn>=1.3.0       # Machine learning

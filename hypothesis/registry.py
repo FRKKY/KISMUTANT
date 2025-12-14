@@ -581,30 +581,177 @@ class StrategyRegistry:
         if not path or not path.exists():
             logger.warning(f"No registry file found at {path}")
             return
-        
+
         with open(path) as f:
             data = json.load(f)
-        
+
         # Clear current state
         self._hypotheses.clear()
         for state in self._by_state:
             self._by_state[state].clear()
         self._by_symbol.clear()
         self._by_type.clear()
-        
+
         # Load hypotheses
         for hid, hdata in data.get("hypotheses", {}).items():
             hypothesis = Hypothesis.from_dict(hdata)
             self._hypotheses[hid] = hypothesis
             self._by_state[hypothesis.state].append(hid)
-            
+
             for symbol in hypothesis.symbols:
                 self._by_symbol[symbol].append(hid)
             self._by_type[hypothesis.strategy_type].append(hid)
-        
+
         self._stats = data.get("stats", self._stats)
-        
+
         logger.info(f"Registry loaded: {len(self._hypotheses)} hypotheses")
+
+    def load_from_database(self) -> int:
+        """
+        Load hypotheses from database.
+
+        Called on startup to restore state from persistent storage.
+        This is the primary method for state restoration in cloud deployments.
+
+        Returns:
+            Number of hypotheses loaded
+        """
+        try:
+            from memory.state_persistence import get_state_persistence
+
+            persistence = get_state_persistence()
+            hyp_dicts = persistence.load_hypotheses()
+
+            if not hyp_dicts:
+                logger.info("No hypotheses found in database")
+                return 0
+
+            loaded = 0
+            for hdata in hyp_dicts:
+                try:
+                    # Convert database dict to Hypothesis object
+                    hypothesis = self._create_hypothesis_from_db(hdata)
+
+                    # Add to registry without emitting events (bulk load)
+                    self._hypotheses[hypothesis.hypothesis_id] = hypothesis
+                    self._by_state[hypothesis.state].append(hypothesis.hypothesis_id)
+
+                    for symbol in hypothesis.symbols:
+                        self._by_symbol[symbol].append(hypothesis.hypothesis_id)
+                    self._by_type[hypothesis.strategy_type].append(hypothesis.hypothesis_id)
+
+                    loaded += 1
+                except Exception as e:
+                    logger.error(f"Failed to restore hypothesis {hdata.get('hypothesis_id')}: {e}")
+
+            logger.info(f"Restored {loaded} hypotheses from database")
+            return loaded
+
+        except Exception as e:
+            logger.error(f"Failed to load hypotheses from database: {e}")
+            return 0
+
+    def _create_hypothesis_from_db(self, data: Dict[str, Any]) -> Hypothesis:
+        """Create a Hypothesis object from database dictionary."""
+        # Handle strategy type
+        strategy_type = data.get('strategy_type', 'momentum')
+        if isinstance(strategy_type, str):
+            strategy_type = StrategyType(strategy_type)
+
+        # Handle state
+        state = data.get('state', 'incubating')
+        if isinstance(state, str):
+            state = StrategyState(state)
+
+        # Create hypothesis
+        hypothesis = Hypothesis(
+            hypothesis_id=data['hypothesis_id'],
+            name=data.get('name', 'Restored Strategy'),
+            description=data.get('description', ''),
+            strategy_type=strategy_type,
+            state=state,
+            symbols=data.get('symbols', []),
+            parameters=data.get('parameters', {}),
+            entry_rules=data.get('entry_rules', {}),
+            exit_rules=data.get('exit_rules', {}),
+            max_position_pct=data.get('max_position_pct', 0.1),
+            stop_loss_pct=data.get('stop_loss_pct', 0.02),
+            take_profit_pct=data.get('take_profit_pct'),
+            max_holding_days=data.get('max_holding_days'),
+            capital_pct=data.get('capital_pct', 0.0),
+            allocated_capital=data.get('allocated_capital', 0.0),
+            tags=data.get('tags', []),
+            notes=data.get('notes', ''),
+            source_pattern_id=data.get('source_pattern_id'),
+            source_research=data.get('source_research'),
+            parent_id=data.get('parent_id'),
+            version=data.get('version', 1),
+        )
+
+        # Restore timestamps
+        if data.get('created_at'):
+            if isinstance(data['created_at'], str):
+                hypothesis.created_at = datetime.fromisoformat(data['created_at'])
+            else:
+                hypothesis.created_at = data['created_at']
+
+        if data.get('incubation_start'):
+            if isinstance(data['incubation_start'], str):
+                hypothesis.incubation_start = datetime.fromisoformat(data['incubation_start'])
+            else:
+                hypothesis.incubation_start = data['incubation_start']
+
+        if data.get('paper_start'):
+            if isinstance(data['paper_start'], str):
+                hypothesis.paper_start = datetime.fromisoformat(data['paper_start'])
+            else:
+                hypothesis.paper_start = data['paper_start']
+
+        if data.get('live_start'):
+            if isinstance(data['live_start'], str):
+                hypothesis.live_start = datetime.fromisoformat(data['live_start'])
+            else:
+                hypothesis.live_start = data['live_start']
+
+        # Restore metrics if available
+        if data.get('total_trades') or data.get('sharpe_ratio'):
+            from hypothesis.models import PerformanceMetrics
+            metrics = PerformanceMetrics(
+                total_trades=data.get('total_trades', 0),
+                win_rate=data.get('win_rate', 0.0),
+                sharpe_ratio=data.get('sharpe_ratio', 0.0),
+                max_drawdown=data.get('max_drawdown', 0.0),
+                profit_factor=data.get('profit_factor', 0.0),
+                total_return=data.get('total_pnl', 0.0),
+            )
+
+            if state == StrategyState.LIVE:
+                hypothesis.live_metrics = metrics
+            elif state == StrategyState.PAPER_TRADING:
+                hypothesis.paper_metrics = metrics
+            else:
+                hypothesis.backtest_metrics = metrics
+
+        return hypothesis
+
+    def save_to_database(self) -> int:
+        """
+        Save all hypotheses to database.
+
+        Called periodically and on shutdown to ensure state is persisted.
+
+        Returns:
+            Number of hypotheses saved
+        """
+        try:
+            from memory.state_persistence import get_state_persistence
+
+            persistence = get_state_persistence()
+            return persistence.save_all_hypotheses(self)
+
+        except Exception as e:
+            logger.error(f"Failed to save hypotheses to database: {e}")
+            return 0
     
     # ===== Statistics =====
     

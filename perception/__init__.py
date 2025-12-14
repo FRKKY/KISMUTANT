@@ -115,18 +115,27 @@ class PerceptionLayer:
         
         logger.info("PerceptionLayer initialized")
     
-    async def initialize(self, daily_history_days: int = 365) -> Dict[str, Any]:
+    async def initialize(
+        self,
+        daily_history_days: int = 365,
+        use_cached_universe: bool = True,
+        parallel_fetch: bool = True,
+        skip_data_fetch: bool = False,
+    ) -> Dict[str, Any]:
         """
         Initialize the perception layer.
-        
-        1. Discover ETF universe
+
+        1. Discover ETF universe (or use cached)
         2. Apply filters
-        3. Fetch historical data
+        3. Fetch historical data (parallel or from cache)
         4. Compute initial features
-        
+
         Args:
             daily_history_days: Days of historical data to fetch
-        
+            use_cached_universe: Use cached universe from DB instead of discovering
+            parallel_fetch: Fetch data in parallel (faster but more API calls)
+            skip_data_fetch: Skip fetching, assume data is in database
+
         Returns:
             Initialization summary
         """
@@ -135,45 +144,81 @@ class PerceptionLayer:
             "universe_discovery": {},
             "data_fetch": {},
             "features": {},
-            "errors": []
+            "errors": [],
+            "optimizations": {
+                "use_cached_universe": use_cached_universe,
+                "parallel_fetch": parallel_fetch,
+                "skip_data_fetch": skip_data_fetch,
+            }
         }
-        
+
         try:
-            # Step 1: Discover universe
-            logger.info("Step 1: Discovering ETF universe...")
-            etfs = await self.universe.discover_etfs()
-            summary["universe_discovery"]["total_discovered"] = len(etfs)
-            
-            # Step 2: Apply filter
-            logger.info("Step 2: Applying universe filter...")
-            self.universe.set_filter(self._universe_filter)
-            filtered_symbols = self.universe.apply_filter()
+            # Step 1: Get universe (cached or discover)
+            if use_cached_universe:
+                logger.info("Step 1: Loading cached universe...")
+                filtered_symbols = await self._load_cached_universe()
+                summary["universe_discovery"]["source"] = "cache"
+            else:
+                logger.info("Step 1: Discovering ETF universe...")
+                etfs = await self.universe.discover_etfs()
+                summary["universe_discovery"]["total_discovered"] = len(etfs)
+                summary["universe_discovery"]["source"] = "api"
+
+            if not filtered_symbols if use_cached_universe else True:
+                # Fall back to discovery if cache empty
+                if use_cached_universe:
+                    logger.info("Cache empty, falling back to discovery...")
+                    etfs = await self.universe.discover_etfs()
+                    summary["universe_discovery"]["total_discovered"] = len(etfs)
+                    summary["universe_discovery"]["source"] = "api_fallback"
+
+                # Step 2: Apply filter
+                logger.info("Step 2: Applying universe filter...")
+                self.universe.set_filter(self._universe_filter)
+                filtered_symbols = self.universe.apply_filter()
+                await self._cache_universe(filtered_symbols)
+
             summary["universe_discovery"]["filtered_count"] = len(filtered_symbols)
             summary["universe_discovery"]["by_category"] = self.universe.get_universe_by_category()
-            
+
             if not filtered_symbols:
                 logger.warning("No symbols passed filter!")
                 return summary
-            
+
             # Step 3: Fetch benchmark data first
             logger.info("Step 3: Fetching benchmark data...")
             benchmark_symbol = self.features.config.benchmark_symbol
             self._benchmark_data = await self.data_fetcher.get_daily_dataframe(
-                benchmark_symbol, 
+                benchmark_symbol,
                 days=daily_history_days
             )
-            if not self._benchmark_data.empty:
+            if self._benchmark_data is not None and not self._benchmark_data.empty:
                 self.features.set_benchmark_data(self._benchmark_data)
                 logger.info(f"Benchmark data loaded: {len(self._benchmark_data)} bars")
-            
+
             # Step 4: Fetch historical data for universe
-            logger.info(f"Step 4: Fetching daily data for {len(filtered_symbols)} symbols...")
-            daily_data = await self.data_fetcher.fetch_daily_history_batch(
-                filtered_symbols, 
-                days=daily_history_days
-            )
-            summary["data_fetch"]["daily_symbols"] = len(daily_data)
-            summary["data_fetch"]["daily_bars"] = sum(len(bars) for bars in daily_data.values())
+            if skip_data_fetch:
+                logger.info("Step 4: Skipping data fetch (using cached data)...")
+                summary["data_fetch"]["source"] = "cache"
+                summary["data_fetch"]["daily_symbols"] = len(filtered_symbols)
+            elif parallel_fetch:
+                logger.info(f"Step 4: Fetching daily data for {len(filtered_symbols)} symbols (parallel)...")
+                daily_data = await self._fetch_data_parallel(
+                    filtered_symbols,
+                    days=daily_history_days
+                )
+                summary["data_fetch"]["source"] = "api_parallel"
+                summary["data_fetch"]["daily_symbols"] = len(daily_data)
+                summary["data_fetch"]["daily_bars"] = sum(len(bars) for bars in daily_data.values())
+            else:
+                logger.info(f"Step 4: Fetching daily data for {len(filtered_symbols)} symbols...")
+                daily_data = await self.data_fetcher.fetch_daily_history_batch(
+                    filtered_symbols,
+                    days=daily_history_days
+                )
+                summary["data_fetch"]["source"] = "api_sequential"
+                summary["data_fetch"]["daily_symbols"] = len(daily_data)
+                summary["data_fetch"]["daily_bars"] = sum(len(bars) for bars in daily_data.values())
             
             # Step 5: Compute features
             logger.info("Step 5: Computing features...")
@@ -393,6 +438,120 @@ class PerceptionLayer:
             "patterns": self.patterns.get_stats(),
             "cached_symbols": len(self._symbol_data)
         }
+
+    # ===== CACHING AND PERFORMANCE HELPERS =====
+
+    async def _load_cached_universe(self) -> List[str]:
+        """
+        Load universe from database cache.
+
+        Returns cached symbols if available, empty list otherwise.
+        """
+        try:
+            from memory.models import get_database, Instrument
+
+            db = get_database()
+            session = db.get_session()
+
+            # Get tradeable instruments from database
+            instruments = session.query(Instrument).filter(
+                Instrument.is_tradeable == True,
+                Instrument.instrument_type.in_(["etf", "stock"])
+            ).all()
+
+            symbols = [inst.symbol for inst in instruments]
+            session.close()
+
+            if symbols:
+                logger.info(f"Loaded {len(symbols)} symbols from cache")
+                # Also update universe manager
+                for symbol in symbols:
+                    self.universe._universe.add(symbol)
+            return symbols
+
+        except Exception as e:
+            logger.warning(f"Failed to load cached universe: {e}")
+            return []
+
+    async def _cache_universe(self, symbols: List[str]) -> None:
+        """
+        Cache universe symbols to database.
+
+        Stores symbols for faster startup on next run.
+        """
+        try:
+            from memory.models import get_database, Instrument
+
+            db = get_database()
+            session = db.get_session()
+
+            for symbol in symbols:
+                # Check if exists
+                existing = session.query(Instrument).filter_by(symbol=symbol).first()
+                if not existing:
+                    instrument = Instrument(
+                        symbol=symbol,
+                        name=f"Symbol {symbol}",
+                        instrument_type="etf",
+                        is_tradeable=True,
+                    )
+                    session.add(instrument)
+
+            session.commit()
+            session.close()
+            logger.info(f"Cached {len(symbols)} symbols to database")
+
+        except Exception as e:
+            logger.warning(f"Failed to cache universe: {e}")
+
+    async def _fetch_data_parallel(
+        self,
+        symbols: List[str],
+        days: int = 365,
+        max_concurrent: int = 5,
+    ) -> Dict[str, List]:
+        """
+        Fetch data for multiple symbols in parallel.
+
+        Uses a semaphore to limit concurrent requests and respect rate limits.
+
+        Args:
+            symbols: Symbols to fetch
+            days: Days of history
+            max_concurrent: Max concurrent fetches
+
+        Returns:
+            Dict of symbol -> bars
+        """
+        results = {}
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def fetch_one(symbol: str) -> tuple:
+            async with semaphore:
+                try:
+                    bars = await self.data_fetcher.fetch_daily_history(symbol, days)
+                    # Small delay to respect rate limits
+                    await asyncio.sleep(0.5)
+                    return symbol, bars
+                except Exception as e:
+                    logger.debug(f"Parallel fetch failed for {symbol}: {e}")
+                    return symbol, []
+
+        # Create tasks for all symbols
+        tasks = [fetch_one(symbol) for symbol in symbols]
+
+        # Run in parallel
+        completed = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results
+        for result in completed:
+            if isinstance(result, tuple):
+                symbol, bars = result
+                if bars:
+                    results[symbol] = bars
+
+        logger.info(f"Parallel fetch complete: {len(results)}/{len(symbols)} successful")
+        return results
 
 
 # Module-level exports

@@ -227,13 +227,19 @@ class Orchestrator:
     async def initialize(self) -> Dict[str, Any]:
         """
         Initialize all components.
-        
+
         Call this before starting the main loop.
         """
         logger.info("Initializing orchestrator...")
         summary = {"components": {}, "errors": []}
-        
+
         try:
+            # ===== RESTORE STATE FROM DATABASE =====
+            # This ensures we don't lose state after restarts/deployments
+            logger.info("Restoring state from database...")
+            state_summary = await self._restore_state()
+            summary["components"]["state_restoration"] = state_summary
+
             # Initialize perception layer
             logger.info("Initializing perception layer...")
             self._perception = PerceptionLayer(
@@ -245,7 +251,7 @@ class Orchestrator:
                     include_inverse=False
                 )
             )
-            
+
             perception_summary = await self._perception.initialize(
                 daily_history_days=365
             )
@@ -285,13 +291,99 @@ class Orchestrator:
             self._start_time = datetime.now()
 
             logger.info("Orchestrator initialization complete")
-            
+
         except Exception as e:
             logger.error(f"Initialization error: {e}")
             summary["errors"].append(str(e))
-        
+
         return summary
-    
+
+    # ===== STATE PERSISTENCE =====
+
+    async def _restore_state(self) -> Dict[str, Any]:
+        """
+        Restore system state from database.
+
+        Called on startup to recover state after restarts/deployments.
+        This is critical for cloud deployments where containers are ephemeral.
+        """
+        summary = {
+            "status": "ok",
+            "hypotheses_restored": 0,
+            "positions_restored": 0,
+        }
+
+        try:
+            # Restore hypotheses (strategies) from database
+            hypotheses_loaded = self._registry.load_from_database()
+            summary["hypotheses_restored"] = hypotheses_loaded
+
+            if hypotheses_loaded > 0:
+                logger.info(f"Restored {hypotheses_loaded} hypotheses from database")
+
+                # Log state breakdown
+                live_count = len(self._registry.get_live_strategies())
+                paper_count = len(self._registry.get_paper_strategies())
+                logger.info(f"  - Live: {live_count}, Paper: {paper_count}")
+
+            # Restore open positions from database
+            positions_loaded = self._positions.load_from_database()
+            summary["positions_restored"] = positions_loaded
+
+            if positions_loaded > 0:
+                logger.info(f"Restored {positions_loaded} open positions from database")
+
+            # Sync allocator with restored state
+            if hypotheses_loaded > 0:
+                self._allocator.allocate_to_strategies()
+
+        except Exception as e:
+            logger.error(f"State restoration failed: {e}")
+            summary["status"] = "error"
+            summary["error"] = str(e)
+
+        return summary
+
+    async def _save_state(self) -> Dict[str, Any]:
+        """
+        Save system state to database.
+
+        Called periodically and on shutdown to ensure state persistence.
+        """
+        summary = {
+            "status": "ok",
+            "hypotheses_saved": 0,
+            "positions_saved": 0,
+        }
+
+        try:
+            # Save hypotheses
+            hypotheses_saved = self._registry.save_to_database()
+            summary["hypotheses_saved"] = hypotheses_saved
+
+            # Save positions
+            positions_saved = self._positions.save_to_database()
+            summary["positions_saved"] = positions_saved
+
+            # Save full system state snapshot
+            from memory.state_persistence import get_state_persistence
+            persistence = get_state_persistence()
+            persistence.save_system_state(
+                self._registry,
+                self._positions,
+                self._allocator,
+                {"mode": self._mode}
+            )
+
+            logger.info(f"State saved: {hypotheses_saved} hypotheses, {positions_saved} positions")
+
+        except Exception as e:
+            logger.error(f"State save failed: {e}")
+            summary["status"] = "error"
+            summary["error"] = str(e)
+
+        return summary
+
     def _register_event_handlers(self) -> None:
         """Register handlers for system events."""
         bus = get_event_bus()
@@ -574,14 +666,18 @@ class Orchestrator:
         logger.info("Stopping orchestrator...")
         self._running = False
         self._state = OrchestratorState.STOPPING
-        
+
+        # ===== SAVE STATE BEFORE SHUTDOWN =====
+        logger.info("Saving state before shutdown...")
+        await self._save_state()
+
         # Cancel tasks
         for task in self._tasks:
             task.cancel()
-        
+
         # Wait for cancellation
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        
+
         self._state = OrchestratorState.STOPPED
         logger.info("Orchestrator stopped")
     

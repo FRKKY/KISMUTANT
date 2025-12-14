@@ -7,6 +7,9 @@ This defines how the system remembers:
 - Every trade it has ever made
 - Every decision and the context in which it was made
 - Its own evolution over time
+
+Supports both SQLite (local development) and PostgreSQL (cloud deployment).
+Configure via DATABASE_URL environment variable.
 """
 
 from datetime import datetime, date
@@ -14,16 +17,18 @@ from decimal import Decimal
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import json
+import os
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean,
     DateTime, Date, Text, ForeignKey, Enum as SQLEnum,
-    UniqueConstraint, Index, JSON, Numeric
+    UniqueConstraint, Index, JSON, Numeric, event
 )
 from sqlalchemy.orm import (
     declarative_base, relationship, sessionmaker, Session
 )
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import StaticPool, QueuePool
+from loguru import logger
 
 Base = declarative_base()
 
@@ -525,38 +530,110 @@ class SystemState(Base):
 
 # === DATABASE SETUP ===
 
+def get_database_url() -> str:
+    """
+    Get database URL from environment or default to SQLite.
+
+    Priority:
+    1. DATABASE_URL environment variable (for Railway/Render/Heroku)
+    2. POSTGRES_URL environment variable (alternate name)
+    3. Default SQLite for local development
+    """
+    # Check for cloud database URL
+    db_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+
+    if db_url:
+        # Railway/Heroku use postgres:// but SQLAlchemy needs postgresql://
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        logger.info(f"Using cloud database: {db_url.split('@')[-1] if '@' in db_url else 'configured'}")
+        return db_url
+
+    # Default to SQLite for local development
+    return "sqlite:///memory/trading_system.db"
+
+
 class Database:
     """
     Database manager for the living trading system.
+
+    Supports:
+    - SQLite for local development
+    - PostgreSQL for cloud deployment (Railway, Render, Heroku)
+
+    Configure via DATABASE_URL environment variable.
     """
-    
-    def __init__(self, db_path: str = "sqlite:///memory/trading_system.db"):
+
+    def __init__(self, db_path: Optional[str] = None):
         """
         Initialize database connection.
-        
+
         Args:
-            db_path: SQLAlchemy database URL
+            db_path: SQLAlchemy database URL. If None, auto-detect from environment.
         """
-        self.db_path = db_path
-        self.engine = create_engine(
-            db_path,
-            connect_args={"check_same_thread": False} if "sqlite" in db_path else {},
-            poolclass=StaticPool if "sqlite" in db_path else None,
-            echo=False
-        )
+        self.db_path = db_path or get_database_url()
+        self.is_sqlite = "sqlite" in self.db_path
+        self.is_postgres = "postgresql" in self.db_path
+
+        # Configure engine based on database type
+        if self.is_sqlite:
+            self.engine = create_engine(
+                self.db_path,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=False
+            )
+        else:
+            # PostgreSQL with connection pooling
+            self.engine = create_engine(
+                self.db_path,
+                poolclass=QueuePool,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_recycle=1800,  # Recycle connections every 30 minutes
+                echo=False
+            )
+
+            # Handle SSL for cloud PostgreSQL
+            if "sslmode" not in self.db_path:
+                # Most cloud providers require SSL
+                self.engine = create_engine(
+                    self.db_path + ("&" if "?" in self.db_path else "?") + "sslmode=require",
+                    poolclass=QueuePool,
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_timeout=30,
+                    pool_recycle=1800,
+                    echo=False
+                )
+
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False)
-        
+        logger.info(f"Database initialized: {'SQLite' if self.is_sqlite else 'PostgreSQL'}")
+
     def create_tables(self):
         """Create all tables."""
         Base.metadata.create_all(self.engine)
-        
+        logger.info("Database tables created/verified")
+
     def get_session(self) -> Session:
         """Get a new database session."""
         return self.SessionLocal()
-    
+
     def close(self):
         """Close database connections."""
         self.engine.dispose()
+        logger.info("Database connections closed")
+
+    def health_check(self) -> bool:
+        """Check if database is accessible."""
+        try:
+            with self.get_session() as session:
+                session.execute("SELECT 1")
+            return True
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
 
 
 # Convenience function for getting database
@@ -566,6 +643,14 @@ def get_database(db_path: Optional[str] = None) -> Database:
     """Get or create the database instance."""
     global _db_instance
     if _db_instance is None:
-        _db_instance = Database(db_path or "sqlite:///memory/trading_system.db")
+        _db_instance = Database(db_path)
         _db_instance.create_tables()
     return _db_instance
+
+
+def reset_database_instance():
+    """Reset the database instance (for testing or reconnection)."""
+    global _db_instance
+    if _db_instance:
+        _db_instance.close()
+    _db_instance = None

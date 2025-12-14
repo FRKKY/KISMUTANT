@@ -531,7 +531,7 @@ class PositionManager:
     def get_stats(self) -> Dict[str, Any]:
         """Get position manager statistics."""
         summary = self.get_summary()
-        
+
         return {
             "open_positions": len(self._positions),
             "closed_positions": len(self._closed_positions),
@@ -540,6 +540,80 @@ class PositionManager:
             "total_realized_pnl": self._total_realized_pnl,
             "positions": [p.to_dict() for p in self._positions.values()]
         }
+
+    # ===== Database Persistence =====
+
+    def load_from_database(self) -> int:
+        """
+        Load open positions from database.
+
+        Called on startup to restore state from persistent storage.
+
+        Returns:
+            Number of positions loaded
+        """
+        try:
+            from memory.state_persistence import get_state_persistence
+
+            persistence = get_state_persistence()
+            pos_dicts = persistence.load_positions()
+
+            if not pos_dicts:
+                logger.info("No open positions found in database")
+                return 0
+
+            loaded = 0
+            for pdata in pos_dicts:
+                try:
+                    # Create position from database data
+                    position = Position(
+                        position_id=self._generate_position_id(),
+                        symbol=pdata['symbol'],
+                        hypothesis_id=pdata.get('hypothesis_id', 'unknown'),
+                        side=PositionSide.LONG,  # Default to long for ISA
+                        entry_price=pdata['entry_price'],
+                        entry_time=pdata.get('entry_time', datetime.now()),
+                        quantity=pdata['quantity'],
+                        current_price=pdata.get('current_price', pdata['entry_price']),
+                        unrealized_pnl=pdata.get('unrealized_pnl', 0.0),
+                        unrealized_pnl_pct=pdata.get('unrealized_pnl_pct', 0.0),
+                    )
+
+                    self._positions[position.symbol] = position
+                    loaded += 1
+
+                except Exception as e:
+                    logger.error(f"Failed to restore position {pdata.get('symbol')}: {e}")
+
+            logger.info(f"Restored {loaded} open positions from database")
+            return loaded
+
+        except Exception as e:
+            logger.error(f"Failed to load positions from database: {e}")
+            return 0
+
+    def save_to_database(self) -> int:
+        """
+        Save all open positions to database.
+
+        Called periodically and on shutdown to ensure state is persisted.
+
+        Returns:
+            Number of positions saved
+        """
+        try:
+            from memory.state_persistence import get_state_persistence
+
+            persistence = get_state_persistence()
+            return persistence.save_all_positions(self)
+
+        except Exception as e:
+            logger.error(f"Failed to save positions to database: {e}")
+            return 0
+
+    def get_all_open(self) -> List[Position]:
+        """Get all open positions."""
+        return list(self._positions.values())
 
 
 # Singleton
