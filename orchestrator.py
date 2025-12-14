@@ -957,7 +957,7 @@ class Orchestrator:
                     logger.info("Starting research paper fetch...")
 
                     # Fetch papers from arXiv
-                    papers = await self._paper_fetcher.fetch_papers(
+                    papers = await self._paper_fetcher.fetch_arxiv_papers(
                         max_results=self.config.max_papers_per_fetch
                     )
 
