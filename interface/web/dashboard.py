@@ -114,8 +114,50 @@ class DataProvider:
     
     @staticmethod
     async def get_hypotheses() -> List[Dict[str, Any]]:
-        """Get all hypotheses - Phase 2+ feature."""
-        return []
+        """Get all hypotheses from registry and knowledge base."""
+        hypotheses = []
+
+        try:
+            # Get from hypothesis registry (active trading strategies)
+            from hypothesis import get_registry
+            registry = get_registry()
+
+            for hyp in registry.get_all():
+                hypotheses.append({
+                    "id": hyp.hypothesis_id[:8],
+                    "name": hyp.name,
+                    "status": hyp.state.value if hasattr(hyp.state, 'value') else str(hyp.state),
+                    "allocation": 0,  # Will be updated from allocator
+                    "win_rate": hyp.backtest_metrics.get("win_rate", 0) * 100 if hyp.backtest_metrics else 0,
+                    "pnl": hyp.backtest_metrics.get("total_pnl", 0) if hyp.backtest_metrics else 0,
+                    "sharpe": hyp.backtest_metrics.get("sharpe_ratio", 0) if hyp.backtest_metrics else 0,
+                    "source": "registry"
+                })
+        except Exception as e:
+            logger.debug(f"Could not fetch from registry: {e}")
+
+        try:
+            # Get from knowledge base (research-generated hypotheses)
+            from research import get_knowledge_base
+            kb = get_knowledge_base()
+
+            for hyp_id, hyp in kb._hypotheses.items():
+                # Avoid duplicates
+                if not any(h["id"] == hyp_id[:8] for h in hypotheses):
+                    hypotheses.append({
+                        "id": hyp_id[:8],
+                        "name": hyp.name,
+                        "status": "research",
+                        "allocation": 0,
+                        "win_rate": 0,
+                        "pnl": 0,
+                        "sharpe": 0,
+                        "source": "research"
+                    })
+        except Exception as e:
+            logger.debug(f"Could not fetch from knowledge base: {e}")
+
+        return hypotheses
     
     @staticmethod
     async def get_trades(limit: int = 20) -> List[Dict[str, Any]]:
@@ -190,6 +232,85 @@ async def api_trades(limit: int = 20):
 async def api_decisions(limit: int = 20):
     """Get recent decisions."""
     return await DataProvider.get_decisions(limit)
+
+
+@app.get("/api/research")
+async def api_research():
+    """Get research module status (papers, ideas, knowledge base)."""
+    result = {
+        "papers": [],
+        "ideas": [],
+        "knowledge_stats": {},
+        "last_fetch": None
+    }
+
+    try:
+        from research import get_knowledge_base, get_fetcher
+        kb = get_knowledge_base()
+        fetcher = get_fetcher()
+
+        # Get papers
+        for paper_id, paper in list(kb._papers.items())[:20]:
+            result["papers"].append({
+                "id": paper_id,
+                "title": paper.title[:80] + "..." if len(paper.title) > 80 else paper.title,
+                "authors": paper.authors[:3],
+                "relevance": paper.relevance_score,
+                "keywords": paper.trading_keywords[:5],
+                "source": paper.source.value
+            })
+
+        # Get ideas
+        for idea_id, idea in list(kb._ideas.items())[:20]:
+            result["ideas"].append({
+                "id": idea_id,
+                "title": idea.title[:60] + "..." if len(idea.title) > 60 else idea.title,
+                "type": idea.idea_type.value if hasattr(idea.idea_type, 'value') else str(idea.idea_type),
+                "confidence": idea.confidence,
+                "actionable": idea.actionable
+            })
+
+        # Stats
+        result["knowledge_stats"] = kb.get_stats()
+        result["fetcher_stats"] = fetcher.get_stats()
+
+    except Exception as e:
+        logger.debug(f"Could not fetch research data: {e}")
+
+    return result
+
+
+@app.get("/api/system")
+async def api_system():
+    """Get full system status including orchestrator state."""
+    result = {
+        "orchestrator": None,
+        "market": {"is_open": False, "next_open": None},
+        "components": {}
+    }
+
+    try:
+        from orchestrator import get_orchestrator
+        from core.clock import get_clock, is_market_open
+
+        clock = get_clock()
+        result["market"] = {
+            "is_open": is_market_open(),
+            "current_time_kst": clock.now().strftime("%Y-%m-%d %H:%M:%S KST"),
+            "time_to_open": str(clock.time_to_open()) if clock.time_to_open() else None
+        }
+
+        # Try to get orchestrator status (may not be initialized)
+        try:
+            orch = get_orchestrator()
+            result["orchestrator"] = orch.get_status()
+        except:
+            pass
+
+    except Exception as e:
+        logger.debug(f"Could not fetch system status: {e}")
+
+    return result
 
 
 @app.get("/api/chart/equity")
