@@ -57,18 +57,18 @@ class LivingTradingSystem:
             logger.info("Initializing broker connection...")
             from execution.broker import KISBroker
             
-            self.broker = KISBroker(paper_trading=(self.mode == "paper"))
-            
-            if not self.broker.connect():
-                logger.error("Failed to connect to broker")
-                return False
-            
-            logger.info(f"Broker connected: {self.mode} mode")
+            self.broker = KISBroker(mode=self.mode)
+
+            # Test connection (will authenticate if needed)
+            if not self.broker.test_connection():
+                logger.warning("Broker connection test failed - continuing anyway")
+
+            logger.info(f"Broker initialized: {self.mode} mode")
             
             # 2. Initialize database
             logger.info("Initializing database...")
-            from memory.models import init_db
-            init_db()
+            from memory.models import get_database
+            get_database()  # Creates tables if needed
             
             # 3. Initialize orchestrator
             logger.info("Initializing orchestrator...")
