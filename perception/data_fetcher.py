@@ -283,7 +283,160 @@ class DataFetcher:
             import traceback
             logger.error(traceback.format_exc())
             return []
-    
+
+    async def fetch_daily_history_extended(
+        self,
+        symbol: str,
+        years: int = 3,
+        use_fdr: bool = True,
+        use_kis_full: bool = True
+    ) -> List[OHLCVBar]:
+        """
+        Fetch extended historical data (3+ years) using multiple sources.
+
+        Priority:
+        1. FinanceDataReader (if available) - fastest, most complete
+        2. KIS API with pagination - official broker data
+        3. Basic KIS API - fallback (limited to ~30 days)
+
+        Args:
+            symbol: ETF symbol
+            years: Years of history to fetch
+            use_fdr: Try FinanceDataReader first
+            use_kis_full: Try KIS chart API with pagination
+
+        Returns:
+            List of OHLCVBar objects
+        """
+        bars = []
+
+        # Try FinanceDataReader first (if enabled and available)
+        if use_fdr:
+            try:
+                from perception.alternative_data import get_alternative_data_manager
+                alt_data = get_alternative_data_manager()
+
+                if alt_data.fdr.is_available:
+                    logger.info(f"Trying FinanceDataReader for {symbol} ({years} years)...")
+                    raw_data = alt_data.fdr.get_daily_ohlcv(symbol, years=years)
+
+                    if raw_data and len(raw_data) > 100:
+                        bars = [
+                            OHLCVBar(
+                                symbol=symbol,
+                                timestamp=datetime.strptime(item["date"], "%Y%m%d"),
+                                timeframe=Timeframe.DAILY,
+                                open=item["open"],
+                                high=item["high"],
+                                low=item["low"],
+                                close=item["close"],
+                                volume=item["volume"]
+                            )
+                            for item in raw_data
+                        ]
+                        logger.info(f"FDR: Got {len(bars)} bars for {symbol}")
+            except Exception as e:
+                logger.warning(f"FinanceDataReader failed for {symbol}: {e}")
+
+        # Try KIS chart API with pagination (if enabled and FDR didn't work)
+        if not bars and use_kis_full and self._broker:
+            try:
+                logger.info(f"Trying KIS chart API for {symbol} ({years} years)...")
+                start_date = (date.today() - timedelta(days=365 * years)).strftime("%Y%m%d")
+                end_date = date.today().strftime("%Y%m%d")
+
+                raw_data = self._broker.get_daily_ohlcv_full(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_records=years * 260  # ~260 trading days per year
+                )
+
+                if raw_data and len(raw_data) > 30:
+                    bars = [
+                        OHLCVBar(
+                            symbol=symbol,
+                            timestamp=datetime.strptime(item["date"], "%Y%m%d"),
+                            timeframe=Timeframe.DAILY,
+                            open=item["open"],
+                            high=item["high"],
+                            low=item["low"],
+                            close=item["close"],
+                            volume=item["volume"]
+                        )
+                        for item in raw_data
+                    ]
+                    logger.info(f"KIS Full: Got {len(bars)} bars for {symbol}")
+            except Exception as e:
+                logger.warning(f"KIS chart API failed for {symbol}: {e}")
+
+        # Fall back to basic KIS API
+        if not bars:
+            logger.info(f"Falling back to basic KIS API for {symbol}")
+            bars = await self.fetch_daily_history(symbol, days=365)
+
+        # Cache and store
+        if bars:
+            self._daily_cache.set(symbol, bars)
+            await self._store_bars(bars)
+
+        return bars
+
+    async def bulk_load_historical(
+        self,
+        symbols: List[str],
+        years: int = 3,
+        delay: float = 0.5
+    ) -> Dict[str, int]:
+        """
+        Bulk load historical data for multiple symbols.
+
+        This is designed to be run once to bootstrap the database with
+        years of historical data for backtesting.
+
+        Args:
+            symbols: List of symbols to load
+            years: Years of history
+            delay: Delay between symbols (rate limiting)
+
+        Returns:
+            Dict mapping symbol to number of bars loaded
+        """
+        results = {}
+        total = len(symbols)
+
+        logger.info(f"Starting bulk historical load: {total} symbols, {years} years")
+
+        for i, symbol in enumerate(symbols):
+            logger.info(f"[{i+1}/{total}] Loading {symbol}...")
+
+            # Check how many bars we already have
+            existing_bars = self._load_bars_from_db(symbol, Timeframe.DAILY, years * 365)
+            existing_count = len(existing_bars) if existing_bars else 0
+
+            # Skip if we already have enough data (90% of expected)
+            expected_bars = years * 250  # ~250 trading days per year
+            if existing_count >= expected_bars * 0.9:
+                logger.info(f"  {symbol}: Already have {existing_count} bars, skipping")
+                results[symbol] = existing_count
+                continue
+
+            # Fetch extended history
+            bars = await self.fetch_daily_history_extended(symbol, years=years)
+            results[symbol] = len(bars) if bars else 0
+
+            logger.info(f"  {symbol}: {results[symbol]} bars (was {existing_count})")
+
+            # Rate limit
+            await asyncio.sleep(delay)
+
+        # Summary
+        total_bars = sum(results.values())
+        successful = sum(1 for v in results.values() if v > 0)
+        logger.info(f"Bulk load complete: {successful}/{total} symbols, {total_bars} total bars")
+
+        return results
+
     async def fetch_daily_history_batch(
         self,
         symbols: List[str],

@@ -351,6 +351,83 @@ async def db_check():
     print("\n=== END DIAGNOSTIC ===\n")
 
 
+async def load_historical(years: int):
+    """Load historical data for all symbols in the database."""
+    from memory.models import get_database, Instrument, PriceBar
+    from perception.data_fetcher import DataFetcher
+    from execution.broker import KISBroker
+    from sqlalchemy import func
+
+    print(f"\n=== LOADING {years} YEARS OF HISTORICAL DATA ===\n")
+
+    # Initialize broker for KIS API access
+    print("Initializing broker...")
+    broker = KISBroker(mode="paper")
+
+    # Initialize data fetcher
+    data_fetcher = DataFetcher(broker=broker)
+
+    # Get database
+    db = get_database()
+    session = db.get_session()
+
+    # Get symbols from database
+    instruments = session.query(Instrument).filter(
+        Instrument.is_tradeable == True
+    ).all()
+    symbols = [i.symbol for i in instruments]
+
+    if not symbols:
+        print("No symbols found in database. Using default ETF list...")
+        symbols = [
+            "069500", "102110", "148020", "252670", "091160",
+            "091170", "091180", "139260", "139270", "143860",
+        ]
+
+    print(f"Found {len(symbols)} symbols to load")
+
+    # Show current DB state
+    bar_count_before = session.query(func.count(PriceBar.id)).scalar()
+    print(f"Current bars in database: {bar_count_before}")
+    session.close()
+
+    # Bulk load historical data
+    print(f"\nLoading {years} years of history for {len(symbols)} symbols...")
+    print("This may take a few minutes...\n")
+
+    results = await data_fetcher.bulk_load_historical(
+        symbols=symbols,
+        years=years,
+        delay=0.5
+    )
+
+    # Show results
+    session = db.get_session()
+    bar_count_after = session.query(func.count(PriceBar.id)).scalar()
+    min_date = session.query(func.min(PriceBar.date)).scalar()
+    max_date = session.query(func.max(PriceBar.date)).scalar()
+    session.close()
+
+    print(f"\n=== LOAD COMPLETE ===")
+    print(f"Symbols processed: {len(results)}")
+    print(f"Total bars: {bar_count_before} -> {bar_count_after} (+{bar_count_after - bar_count_before})")
+    print(f"Date range: {min_date} to {max_date}")
+
+    # Show per-symbol summary
+    successful = {k: v for k, v in results.items() if v > 100}
+    limited = {k: v for k, v in results.items() if 0 < v <= 100}
+    failed = {k: v for k, v in results.items() if v == 0}
+
+    print(f"\nSuccess (100+ bars): {len(successful)} symbols")
+    print(f"Limited (1-100 bars): {len(limited)} symbols")
+    print(f"Failed (0 bars): {len(failed)} symbols")
+
+    if failed:
+        print(f"\nFailed symbols: {list(failed.keys())[:10]}...")
+
+    print("\n=== DONE ===\n")
+
+
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="KISMUTANT - Living Trading System")
@@ -370,11 +447,22 @@ async def main():
         action="store_true",
         help="Check database connection and contents"
     )
+    parser.add_argument(
+        "--load-history",
+        type=int,
+        default=0,
+        metavar="YEARS",
+        help="Load N years of historical data (e.g., --load-history 3)"
+    )
 
     args = parser.parse_args()
 
     if args.db_check:
         await db_check()
+        return
+
+    if args.load_history > 0:
+        await load_historical(args.load_history)
         return
 
     if args.web_only:
