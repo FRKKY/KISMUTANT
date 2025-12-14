@@ -536,19 +536,42 @@ def get_database_url() -> str:
 
     Priority:
     1. DATABASE_URL environment variable (for Railway/Render/Heroku)
-    2. POSTGRES_URL environment variable (alternate name)
-    3. Default SQLite for local development
+    2. DATABASE_PRIVATE_URL (Railway internal networking)
+    3. POSTGRES_URL environment variable (alternate name)
+    4. Construct from PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE
+    5. Default SQLite for local development
     """
-    # Check for cloud database URL
-    db_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+    # Check for cloud database URL - try multiple variable names
+    db_url = (
+        os.environ.get("DATABASE_URL") or
+        os.environ.get("DATABASE_PRIVATE_URL") or
+        os.environ.get("POSTGRES_URL") or
+        os.environ.get("POSTGRESQL_URL")
+    )
+
+    # If individual PG variables are set, construct the URL
+    if not db_url:
+        pg_host = os.environ.get("PGHOST")
+        pg_port = os.environ.get("PGPORT", "5432")
+        pg_user = os.environ.get("PGUSER")
+        pg_password = os.environ.get("PGPASSWORD")
+        pg_database = os.environ.get("PGDATABASE")
+
+        if pg_host and pg_user and pg_database:
+            db_url = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_database}"
+            logger.info(f"Constructed database URL from PG* variables: {pg_host}/{pg_database}")
 
     if db_url:
         # Railway/Heroku use postgres:// but SQLAlchemy needs postgresql://
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-        logger.info(f"Using cloud database: {db_url.split('@')[-1] if '@' in db_url else 'configured'}")
+        # Log which database we're connecting to (hide password)
+        safe_url = db_url.split('@')[-1] if '@' in db_url else 'configured'
+        logger.info(f"Using cloud database: {safe_url}")
         return db_url
 
+    # Log which variables were checked
+    logger.info("No cloud database URL found. Checked: DATABASE_URL, DATABASE_PRIVATE_URL, POSTGRES_URL, POSTGRESQL_URL, PGHOST")
     # Default to SQLite for local development
     return "sqlite:///memory/trading_system.db"
 

@@ -239,6 +239,73 @@ async def run_web_only():
     await server.serve()
 
 
+async def db_check():
+    """Check database status and contents."""
+    from memory.models import get_database, get_database_url, PriceBar, Instrument, Hypothesis
+    from sqlalchemy import func
+
+    print("\n=== DATABASE DIAGNOSTIC ===\n")
+
+    # Show which database we're connecting to
+    db_url = get_database_url()
+    if "postgresql" in db_url:
+        safe_url = db_url.split('@')[-1] if '@' in db_url else 'configured'
+        print(f"Database type: PostgreSQL")
+        print(f"Host/DB: {safe_url}")
+    else:
+        print(f"Database type: SQLite (local)")
+        print(f"Path: {db_url}")
+
+    # Check environment variables
+    print("\n--- Environment Variables ---")
+    for var in ["DATABASE_URL", "DATABASE_PRIVATE_URL", "POSTGRES_URL", "PGHOST", "PGDATABASE"]:
+        value = os.environ.get(var)
+        if value:
+            # Mask password in URL
+            if "@" in str(value):
+                safe = value.split("@")[-1]
+                print(f"{var}: ***@{safe}")
+            else:
+                print(f"{var}: {value[:20]}..." if len(str(value)) > 20 else f"{var}: {value}")
+        else:
+            print(f"{var}: (not set)")
+
+    # Connect and check contents
+    print("\n--- Database Contents ---")
+    try:
+        db = get_database()
+        session = db.get_session()
+
+        # Count records in each table
+        instrument_count = session.query(func.count(Instrument.id)).scalar()
+        bar_count = session.query(func.count(PriceBar.id)).scalar()
+        hypothesis_count = session.query(func.count(Hypothesis.id)).scalar()
+
+        print(f"Instruments: {instrument_count}")
+        print(f"Price Bars: {bar_count}")
+        print(f"Hypotheses: {hypothesis_count}")
+
+        # Show date range if we have bars
+        if bar_count > 0:
+            earliest = session.query(func.min(PriceBar.date)).scalar()
+            latest = session.query(func.max(PriceBar.date)).scalar()
+            print(f"Date range: {earliest} to {latest}")
+
+            # Sample some symbols
+            sample_instruments = session.query(Instrument).limit(5).all()
+            print(f"\nSample instruments: {[i.symbol for i in sample_instruments]}")
+
+        session.close()
+        print("\n✓ Database connection successful")
+
+    except Exception as e:
+        print(f"\n✗ Database error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("\n=== END DIAGNOSTIC ===\n")
+
+
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="KISMUTANT - Living Trading System")
@@ -253,9 +320,18 @@ async def main():
         action="store_true",
         help="Run only the web dashboard"
     )
-    
+    parser.add_argument(
+        "--db-check",
+        action="store_true",
+        help="Check database connection and contents"
+    )
+
     args = parser.parse_args()
-    
+
+    if args.db_check:
+        await db_check()
+        return
+
     if args.web_only:
         logger.info("Starting web-only mode...")
         await run_web_only()
