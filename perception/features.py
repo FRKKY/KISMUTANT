@@ -237,9 +237,13 @@ class FeatureEngine:
         Combines short, medium, and long-term price action.
         """
         prev_close = df['close'].shift(1)
-        
-        bp = df['close'] - df[['low', prev_close]].min(axis=1)  # Buying Pressure
-        tr = df[['high', prev_close]].max(axis=1) - df[['low', prev_close]].min(axis=1)  # True Range
+
+        # True Low/High for Ultimate Oscillator
+        true_low = np.minimum(df['low'], prev_close)
+        true_high = np.maximum(df['high'], prev_close)
+
+        bp = df['close'] - true_low  # Buying Pressure
+        tr = true_high - true_low  # True Range
         
         avg1 = bp.rolling(period1).sum() / tr.rolling(period1).sum()
         avg2 = bp.rolling(period2).sum() / tr.rolling(period2).sum()

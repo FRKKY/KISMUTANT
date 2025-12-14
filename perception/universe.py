@@ -313,7 +313,7 @@ class UniverseManager:
         """Classify ETF based on name keywords."""
         name_upper = name.upper()
         name_lower = name.lower()
-        
+
         # Check leverage/inverse first (highest priority)
         if any(kw in name for kw in ["레버리지", "2X", "2배"]):
             return ETFCategory.LEVERAGE_2X
@@ -321,16 +321,31 @@ class UniverseManager:
             return ETFCategory.INVERSE_2X
         if any(kw in name for kw in ["인버스", "inverse"]):
             return ETFCategory.INVERSE_1X
-        
-        # Check other categories
-        for category, keywords in self._category_keywords.items():
-            if category in [ETFCategory.LEVERAGE_2X, ETFCategory.INVERSE_1X, ETFCategory.INVERSE_2X]:
-                continue  # Already checked
-            
+
+        # Check international categories first (more specific keywords)
+        intl_categories = [
+            ETFCategory.INTL_US, ETFCategory.INTL_CHINA, ETFCategory.INTL_JAPAN,
+            ETFCategory.INTL_EUROPE, ETFCategory.INTL_EMERGING, ETFCategory.INTL_GLOBAL
+        ]
+        for category in intl_categories:
+            keywords = self._category_keywords.get(category, [])
             for keyword in keywords:
                 if keyword.lower() in name_lower or keyword.upper() in name_upper:
                     return category
-        
+
+        # Check other categories
+        skip_categories = {
+            ETFCategory.LEVERAGE_2X, ETFCategory.INVERSE_1X, ETFCategory.INVERSE_2X,
+            *intl_categories
+        }
+        for category, keywords in self._category_keywords.items():
+            if category in skip_categories:
+                continue  # Already checked
+
+            for keyword in keywords:
+                if keyword.lower() in name_lower or keyword.upper() in name_upper:
+                    return category
+
         return ETFCategory.OTHER
     
     def _is_leverage_or_inverse(self, name: str) -> tuple[bool, bool, float]:
